@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from homeassistant.config_entries import (
@@ -11,7 +12,6 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers.device_registry import format_mac
-from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 import voluptuous as vol
 
 from .const import (
@@ -45,10 +45,16 @@ from .const import (
     VERSION_V3,
 )
 from .coordinator import CyberPowerConfigEntry
+from .discovery import DiscoveredPdu, async_discover_pdus
 from .snmp import CyberPowerSnmp, SnmpCredentials, SnmpError, as_mac, as_str
+
+_LOGGER = logging.getLogger(__name__)
 
 # CyberPower Systems enterprise number; sysObjectID must live under it.
 _CYBERPOWER_ENTERPRISE = "3808"
+# Sentinel option for "I'll type an IP myself" in the discovery picker.
+CONF_DEVICE = "device"
+MANUAL = "__manual__"
 
 
 class CannotConnect(Exception):
@@ -96,6 +102,7 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize the flow."""
         self._data: dict[str, Any] = {}
+        self._discovered: dict[str, DiscoveredPdu] = {}
 
     @staticmethod
     @callback
@@ -105,24 +112,53 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
         """Return the options flow."""
         return CyberPowerOptionsFlow()
 
-    async def async_step_dhcp(
-        self, discovery_info: DhcpServiceInfo
-    ) -> ConfigFlowResult:
-        """Handle discovery via DHCP (CyberPower OUI)."""
-        self._async_abort_entries_match({CONF_HOST: discovery_info.ip})
-        await self.async_set_unique_id(format_mac(discovery_info.macaddress))
-        self._abort_if_unique_id_configured(updates={CONF_HOST: discovery_info.ip})
-        self._data[CONF_HOST] = discovery_info.ip
-        self.context["title_placeholders"] = {
-            "name": discovery_info.hostname or discovery_info.ip
-        }
-        return await self.async_step_user()
+    def _already_configured(self, pdu: DiscoveredPdu) -> bool:
+        """True if a discovered PDU matches an existing entry (by MAC or host)."""
+        entries = self._async_current_entries()
+        hosts = {entry.data.get(CONF_HOST) for entry in entries}
+        unique_ids = {entry.unique_id for entry in entries}
+        unique_id = format_mac(pdu.mac) if pdu.mac else (pdu.serial or pdu.host)
+        return pdu.host in hosts or unique_id in unique_ids
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Collect connection details (host, port, SNMP version)."""
-        errors: dict[str, str] = {}
+        """Scan the network and let the user pick a PDU (or go manual)."""
+        if user_input is not None:
+            choice = user_input[CONF_DEVICE]
+            if choice == MANUAL:
+                return await self.async_step_manual()
+            pdu = self._discovered[choice]
+            self._data[CONF_HOST] = pdu.host
+            self._data[CONF_PORT] = DEFAULT_PORT
+            self._data[CONF_VERSION] = DEFAULT_VERSION
+            return await self.async_step_credentials()
+
+        try:
+            discovered = await async_discover_pdus(self.hass)
+        except Exception:  # discovery is best-effort; fall back to manual
+            _LOGGER.debug("Network discovery failed", exc_info=True)
+            discovered = []
+
+        self._discovered = {
+            pdu.host: pdu for pdu in discovered if not self._already_configured(pdu)
+        }
+        if not self._discovered:
+            return await self.async_step_manual()
+
+        options = {
+            host: f"{pdu.model} ({host})" for host, pdu in self._discovered.items()
+        }
+        options[MANUAL] = "Enter IP address manually"
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema({vol.Required(CONF_DEVICE): vol.In(options)}),
+        )
+
+    async def async_step_manual(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Collect connection details by hand (the always-available fallback)."""
         if user_input is not None:
             self._data.update(user_input)
             return await self.async_step_credentials()
@@ -138,7 +174,7 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
                 ),
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+        return self.async_show_form(step_id="manual", data_schema=schema)
 
     async def async_step_credentials(
         self, user_input: dict[str, Any] | None = None

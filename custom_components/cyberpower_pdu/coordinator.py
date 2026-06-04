@@ -12,6 +12,9 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    CONF_COMMUNITY,
+    CONF_HOST,
+    DEFAULT_COMMUNITY,
     DEVICE_BANK_ID,
     DOMAIN,
     MAX_BACKOFF_INTERVAL,
@@ -33,6 +36,7 @@ from .const import (
     OID_SYS_NAME,
     OUTLET_STATE_ON,
 )
+from .discovery import async_find_host_for_mac
 from .snmp import CyberPowerSnmp, SnmpError, as_int, as_mac, as_str
 
 _LOGGER = logging.getLogger(__name__)
@@ -135,6 +139,7 @@ class CyberPowerCoordinator(DataUpdateCoordinator[PduData]):
         self.host = host
         self._base_interval = timedelta(seconds=scan_interval)
         self._failures = 0
+        self._healing = False
 
     def _next_backoff(self) -> timedelta:
         """Exponential backoff capped at MAX_BACKOFF_INTERVAL."""
@@ -143,6 +148,42 @@ class CyberPowerCoordinator(DataUpdateCoordinator[PduData]):
             MAX_BACKOFF_INTERVAL,
         )
         return timedelta(seconds=seconds)
+
+    def _maybe_self_heal(self) -> None:
+        """At the backoff ceiling, try to relocate a moved PDU by its MAC.
+
+        Runs as a background task so a coordinator poll never blocks on a scan.
+        """
+        at_ceiling = self.update_interval == timedelta(seconds=MAX_BACKOFF_INTERVAL)
+        if at_ceiling and self.info.mac and not self._healing:
+            self._healing = True
+            self.config_entry.async_create_background_task(
+                self.hass, self._async_self_heal(), "cyberpower_pdu_self_heal"
+            )
+
+    async def _async_self_heal(self) -> None:
+        """Re-resolve the PDU's IP by MAC and update the entry if it moved."""
+        try:
+            mac = self.info.mac
+            if not mac:
+                return
+            community = self.config_entry.data.get(CONF_COMMUNITY, DEFAULT_COMMUNITY)
+            new_host = await async_find_host_for_mac(self.hass, mac, community)
+            if new_host and new_host != self.host:
+                _LOGGER.info(
+                    "CyberPower PDU %s moved from %s to %s; updating entry",
+                    mac,
+                    self.host,
+                    new_host,
+                )
+                # Changing the host fires the entry's update listener, which
+                # reloads the entry against the new address.
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    data={**self.config_entry.data, CONF_HOST: new_host},
+                )
+        finally:
+            self._healing = False
 
     async def async_setup(self) -> None:
         """Read the static identity and topology of the PDU once."""
@@ -227,6 +268,7 @@ class CyberPowerCoordinator(DataUpdateCoordinator[PduData]):
                 self._failures,
                 self.update_interval,
             )
+            self._maybe_self_heal()
             raise UpdateFailed(f"Error polling PDU: {err}") from err
 
         if self._failures:

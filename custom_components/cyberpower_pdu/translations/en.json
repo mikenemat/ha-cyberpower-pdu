@@ -4,6 +4,13 @@
     "step": {
       "user": {
         "title": "CyberPower PDU",
+        "description": "Select a PDU found on your network, or choose to enter an IP address manually.",
+        "data": {
+          "device": "Device"
+        }
+      },
+      "manual": {
+        "title": "CyberPower PDU",
         "description": "Enter the network address of your CyberPower PDU and the SNMP version to use.",
         "data": {
           "host": "Host",

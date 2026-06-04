@@ -104,12 +104,22 @@ class SnmpCredentials:
 class CyberPowerSnmp:
     """Reusable async SNMP session against a single PDU."""
 
-    def __init__(self, host: str, port: int, credentials: SnmpCredentials) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        credentials: SnmpCredentials,
+        *,
+        timeout: float = SNMP_TIMEOUT,
+        retries: int = SNMP_RETRIES,
+    ) -> None:
         self._host = host
         self._port = port
         self._credentials = credentials
         self._read_auth = credentials._read_auth()
         self._write_auth = credentials._write_auth()
+        self._timeout = timeout
+        self._retries = retries
         self._engine: SnmpEngine | None = None
         self._target: UdpTransportTarget | None = None
         # The device answers one request at a time; serialize to avoid
@@ -122,8 +132,8 @@ class CyberPowerSnmp:
         if self._target is None:
             self._target = await UdpTransportTarget.create(
                 (self._host, self._port),
-                timeout=SNMP_TIMEOUT,
-                retries=SNMP_RETRIES,
+                timeout=self._timeout,
+                retries=self._retries,
             )
         return self._engine, self._target
 

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from unittest.mock import AsyncMock, patch
 
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.cyberpower_pdu import const as c
 from custom_components.cyberpower_pdu.const import DEFAULT_SCAN_INTERVAL
 
 from .conftest import FakeSnmp
@@ -40,3 +42,28 @@ async def test_backoff_and_recovery(
     await coordinator.async_refresh()
     assert coordinator.last_update_success is True
     assert coordinator.update_interval == base
+
+
+async def test_self_heal_updates_ip_on_move(
+    hass: HomeAssistant, fake_snmp: FakeSnmp, config_entry: MockConfigEntry
+) -> None:
+    """At the backoff ceiling, a MAC rescan relocates the PDU and updates the IP."""
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = config_entry.runtime_data
+
+    with patch(
+        "custom_components.cyberpower_pdu.coordinator.async_find_host_for_mac",
+        new=AsyncMock(return_value="192.0.2.250"),
+    ) as find:
+        fake_snmp.fail = True
+        await coordinator.async_refresh()  # failure #1 -> 30s, no self-heal yet
+        assert find.call_count == 0
+        await coordinator.async_refresh()  # failure #2 -> 60s ceiling -> self-heal
+        # Let the reload (triggered by the host update) settle successfully.
+        fake_snmp.fail = False
+        await hass.async_block_till_done()
+
+    find.assert_awaited()
+    assert config_entry.data[c.CONF_HOST] == "192.0.2.250"

@@ -53,16 +53,28 @@ SNMP_MAX_VARBINDS: Final = 10
 SNMP_TIMEOUT: Final = 4.0
 SNMP_RETRIES: Final = 1
 
+# --- Active network discovery -----------------------------------------------
+# CyberPower Systems OUI; used to recognise the device's MAC during discovery.
+CYBERPOWER_OUI: Final = "00:0c:15"
+# Short, no-retry probe so a full subnet sweep stays fast.
+DISCOVERY_TIMEOUT: Final = 1.0
+DISCOVERY_RETRIES: Final = 0
+DISCOVERY_CONCURRENCY: Final = 50
+# Never sweep networks larger than this many addresses (avoids scanning a /16).
+MAX_DISCOVERY_HOSTS: Final = 1024
+
 # --- OID building blocks -----------------------------------------------------
 ENTERPRISE: Final = "1.3.6.1.4.1.3808"
 # CyberPower ePDU subtree (sysObjectID is enterprises.3808.1.1.3 on these PDUs)
 EPDU: Final = f"{ENTERPRISE}.1.1.3"
 
 # Identification group (.1)
-OID_IDENT_MODEL: Final = f"{EPDU}.1.1.0"
+# .1.1.0 is ePDUIdentName — a USER-EDITABLE label (e.g. "theater-pdu-3").
+# .1.5.0 is ePDUIdentModelNumber — the fixed hardware model (e.g. "PDU41008").
+OID_IDENT_NAME: Final = f"{EPDU}.1.1.0"
 OID_IDENT_HW_REV: Final = f"{EPDU}.1.2.0"
 OID_IDENT_FW_REV: Final = f"{EPDU}.1.3.0"
-OID_IDENT_NAME: Final = f"{EPDU}.1.5.0"
+OID_IDENT_MODEL: Final = f"{EPDU}.1.5.0"
 OID_IDENT_SERIAL: Final = f"{EPDU}.1.6.0"
 OID_IDENT_OUTLET_COUNT: Final = f"{EPDU}.1.8.0"
 

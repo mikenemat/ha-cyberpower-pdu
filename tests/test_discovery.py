@@ -1,15 +1,17 @@
-"""Multi-PDU, dynamic-topology, and discovery/IP-change tests."""
+"""Active discovery, multi-PDU, and dynamic-topology tests."""
 
 from __future__ import annotations
 
-from homeassistant.config_entries import SOURCE_DHCP, ConfigEntryState
+import ipaddress
+from unittest.mock import AsyncMock, patch
+
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.cyberpower_pdu import const as c
+from custom_components.cyberpower_pdu import const as c, discovery as d
+from custom_components.cyberpower_pdu.discovery import DiscoveredPdu
 
 from .conftest import FakeSnmp
 
@@ -31,6 +33,75 @@ def _entry(host: str, unique_id: str) -> MockConfigEntry:
 def _uids(hass: HomeAssistant, entry: MockConfigEntry) -> list[str]:
     reg = er.async_get(hass)
     return [e.unique_id for e in er.async_entries_for_config_entry(reg, entry.entry_id)]
+
+
+# --- discovery engine -------------------------------------------------------
+
+
+async def test_discovery_probes_arp_live_hosts(hass: HomeAssistant) -> None:
+    """Only ARP-live hosts are probed; non-PDU responders are filtered out."""
+    net = ipaddress.ip_network("192.0.2.0/24")
+
+    async def fake_probe(host, community):
+        if host == "192.0.2.50":
+            return DiscoveredPdu(host, "00:0c:15:11:22:33", "PDU41008", "SN1")
+        return None
+
+    with (
+        patch.object(d, "_local_networks", AsyncMock(return_value=[net])),
+        patch.object(
+            d,
+            "_read_arp_table",
+            return_value={
+                "192.0.2.50": "00:0c:15:11:22:33",
+                "192.0.2.99": "de:ad:be:ef:00:01",
+            },
+        ),
+        patch.object(d, "_probe_host", side_effect=fake_probe) as probe,
+    ):
+        found = await d.async_discover_pdus(hass)
+
+    assert [p.host for p in found] == ["192.0.2.50"]
+    probed = {call.args[0] for call in probe.call_args_list}
+    assert probed == {"192.0.2.50", "192.0.2.99"}  # only ARP-live hosts
+
+
+async def test_discovery_sweeps_when_arp_cold(hass: HomeAssistant) -> None:
+    """An empty ARP cache falls back to a bounded subnet sweep."""
+    net = ipaddress.ip_network("192.0.2.0/29")  # .1-.6
+
+    async def fake_probe(host, community):
+        if host == "192.0.2.3":
+            return DiscoveredPdu(host, "00:0c:15:00:00:03", "PDU", "S")
+        return None
+
+    with (
+        patch.object(d, "_local_networks", AsyncMock(return_value=[net])),
+        patch.object(d, "_read_arp_table", return_value={}),
+        patch.object(d, "_probe_host", side_effect=fake_probe) as probe,
+    ):
+        found = await d.async_discover_pdus(hass)
+
+    assert [p.host for p in found] == ["192.0.2.3"]
+    assert len(probe.call_args_list) == 6  # full sweep of the /29 host range
+
+
+async def test_find_host_for_mac(hass: HomeAssistant) -> None:
+    """MAC lookup returns the current IP regardless of case."""
+    with patch.object(
+        d,
+        "async_discover_pdus",
+        AsyncMock(
+            return_value=[DiscoveredPdu("192.0.2.80", "00:0c:15:ab:cd:ef", "PDU", "S")]
+        ),
+    ):
+        assert (
+            await d.async_find_host_for_mac(hass, "00:0C:15:AB:CD:EF") == "192.0.2.80"
+        )
+        assert await d.async_find_host_for_mac(hass, "00:00:00:00:00:00") is None
+
+
+# --- multi-PDU and dynamic topology ----------------------------------------
 
 
 async def test_two_pdus_coexist(
@@ -56,14 +127,13 @@ async def test_two_pdus_coexist(
     assert len(dr.async_entries_for_config_entry(dev_reg, config_entry.entry_id)) == 1
     assert len(dr.async_entries_for_config_entry(dev_reg, entry2.entry_id)) == 1
 
-    # 16 outlets each, no cross-talk
     assert sum(1 for u in _uids(hass, config_entry) if "_outlet_" in u) == 16
     assert sum(1 for u in _uids(hass, entry2) if "_outlet_" in u) == 16
     assert hass.states.async_entity_ids_count("switch") == 32
 
 
 async def test_dynamic_outlet_count(hass: HomeAssistant, fake_snmp: FakeSnmp) -> None:
-    """An 8-outlet PDU yields exactly 8 switches (count is discovered, not assumed)."""
+    """An 8-outlet PDU yields exactly 8 switches (count is discovered)."""
     fake_snmp.extras["192.0.2.60"] = FakeSnmp(  # type: ignore[attr-defined]
         serial="SN8",
         mac=b"\x00\x0c\x15\x00\x00\x08",
@@ -93,23 +163,6 @@ async def test_single_bank_total_only(hass: HomeAssistant, fake_snmp: FakeSnmp) 
     assert any(u.endswith("_total_power") for u in uids)
     assert not any("_bank_power" in u for u in uids)
     assert not any("_bank_current" in u for u in uids)
-
-
-async def test_dhcp_updates_changed_ip(
-    hass: HomeAssistant, fake_snmp: FakeSnmp, config_entry: MockConfigEntry
-) -> None:
-    """A rediscovery at a new IP updates the existing entry's host."""
-    config_entry.add_to_hass(hass)
-    info = DhcpServiceInfo(
-        ip="192.0.2.77", hostname="pdu41008", macaddress="000c15112233"
-    )
-    result = await hass.config_entries.flow.async_init(
-        c.DOMAIN, context={"source": SOURCE_DHCP}, data=info
-    )
-    await hass.async_block_till_done()
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "already_configured"
-    assert config_entry.data[c.CONF_HOST] == "192.0.2.77"
 
 
 async def test_remove_pdu(
