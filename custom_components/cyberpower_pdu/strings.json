@@ -1,0 +1,62 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "CyberPower PDU",
+        "description": "Enter the network address of your CyberPower PDU and the SNMP version to use.",
+        "data": {
+          "host": "Host",
+          "port": "SNMP port",
+          "snmp_version": "SNMP version"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the PDU's network card.",
+          "snmp_version": "v1 is the simplest. Use v3 if you have configured a USM user."
+        }
+      },
+      "credentials": {
+        "title": "SNMP credentials",
+        "description": "Credentials for {host}. For SNMP v1/v2c the defaults (public / private) match a factory PDU; the write community is required to control outlets.",
+        "data": {
+          "community": "Read community",
+          "write_community": "Write community",
+          "username": "Username",
+          "auth_protocol": "Authentication protocol",
+          "auth_key": "Authentication key",
+          "priv_protocol": "Privacy protocol",
+          "priv_key": "Privacy key"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the PDU over SNMP. Check the address, port, and credentials.",
+      "not_cyberpower": "That device responded to SNMP but is not a CyberPower PDU."
+    },
+    "abort": {
+      "already_configured": "This PDU is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "CyberPower PDU options",
+        "data": {
+          "scan_interval": "Poll interval (seconds)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "total_power": { "name": "Power" },
+      "total_current": { "name": "Current" },
+      "total_voltage": { "name": "Voltage" },
+      "total_apparent_power": { "name": "Apparent power" },
+      "total_power_factor": { "name": "Power factor" },
+      "total_energy": { "name": "Energy" },
+      "bank_power": { "name": "Bank {bank} power" },
+      "bank_current": { "name": "Bank {bank} current" }
+    }
+  }
+}

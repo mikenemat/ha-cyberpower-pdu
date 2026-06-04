@@ -1,0 +1,2 @@
+pytest-homeassistant-custom-component
+pysnmp==7.1.22

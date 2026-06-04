@@ -1,0 +1,26 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+          pip install -r requirements_test.txt
+      - name: Ruff lint
+        run: ruff check custom_components tests
+      - name: Ruff format
+        run: ruff format --check custom_components tests
+      - name: Pytest
+        run: pytest --cov=custom_components.cyberpower_pdu --cov-report=term-missing

@@ -1,0 +1,14 @@
+{
+  "domain": "cyberpower_pdu",
+  "name": "CyberPower PDU",
+  "codeowners": ["@mikenemat"],
+  "config_flow": true,
+  "dhcp": [{ "macaddress": "000C15*" }],
+  "documentation": "https://github.com/mikenemat/ha-cyberpower-pdu",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/mikenemat/ha-cyberpower-pdu/issues",
+  "loggers": ["pysnmp"],
+  "requirements": ["pysnmp==7.1.22"],
+  "version": "0.1.0"
+}
