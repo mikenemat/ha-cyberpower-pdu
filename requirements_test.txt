@@ -1,2 +1,2 @@
 pytest-homeassistant-custom-component
-pysnmp==7.1.22
+pysnmp==7.1.27
