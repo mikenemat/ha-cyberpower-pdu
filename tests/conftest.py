@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Generator
 from unittest.mock import patch
 
-from custom_components.cyberpower_pdu import const as c
-from custom_components.cyberpower_pdu.snmp import SnmpError
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.cyberpower_pdu import const as c
+from custom_components.cyberpower_pdu.snmp import SnmpError
 
 # 16-outlet, 2-bank PDU modelled on the real PDU41008. Outlet 12 = "LED", off.
 _NAMES = {i: f"Outlet {i}" for i in range(1, 17)}
