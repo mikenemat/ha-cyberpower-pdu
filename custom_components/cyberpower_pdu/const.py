@@ -43,6 +43,9 @@ DEFAULT_WRITE_COMMUNITY: Final = "private"
 DEFAULT_VERSION: Final = VERSION_V1
 DEFAULT_SCAN_INTERVAL: Final = 15  # seconds
 MIN_SCAN_INTERVAL: Final = 5
+# On repeated poll failures the interval doubles up to this ceiling, then the
+# coordinator snaps back to the normal interval on the first success.
+MAX_BACKOFF_INTERVAL: Final = 60  # seconds
 
 # Device hard limit observed on PDU41008: 12 varbinds/GET fails at 13.
 # We chunk reads below that for a safety margin.

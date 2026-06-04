@@ -36,6 +36,7 @@ async def async_get_config_entry_diagnostics(
             "serial": coordinator.info.serial,
             "mac": coordinator.info.mac,
             "outlet_count": len(coordinator.info.outlets),
+            "total_bank_id": coordinator.info.total_bank_id,
             "bank_ids": coordinator.info.bank_ids,
             "load_rows": coordinator.info.load_rows,
         },

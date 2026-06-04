@@ -14,10 +14,10 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import (
     DEVICE_BANK_ID,
     DOMAIN,
+    MAX_BACKOFF_INTERVAL,
     OID_IDENT_FW_REV,
     OID_IDENT_MODEL,
     OID_IDENT_NAME,
-    OID_IDENT_OUTLET_COUNT,
     OID_IDENT_SERIAL,
     OID_IF_PHYS_ADDRESS,
     OID_LOAD_APPARENT,
@@ -59,13 +59,29 @@ class PduInfo:
     name: str
     mac: str | None
     outlets: list[OutletInfo] = field(default_factory=list)
-    # bank_id (0 = whole device) -> table row index in the load table
+    # bank_id (0 = whole device on these PDUs) -> table row index. Discovered at
+    # runtime by walking the load table; never assumed.
     load_rows: dict[int, int] = field(default_factory=dict)
 
     @property
+    def total_bank_id(self) -> int | None:
+        """The metering row that represents the whole PDU, if any.
+
+        Prefer the dedicated device row (bank 0). On a PDU that exposes only a
+        single metering row, that row *is* the total. With multiple bank rows and
+        no device row, there is no single total row.
+        """
+        if DEVICE_BANK_ID in self.load_rows:
+            return DEVICE_BANK_ID
+        if len(self.load_rows) == 1:
+            return next(iter(self.load_rows))
+        return None
+
+    @property
     def bank_ids(self) -> list[int]:
-        """Metering bank ids excluding the device-total row."""
-        return sorted(b for b in self.load_rows if b != DEVICE_BANK_ID)
+        """Per-bank metering rows, excluding whichever row is the PDU total."""
+        total = self.total_bank_id
+        return sorted(b for b in self.load_rows if b != total)
 
 
 @dataclass(slots=True)
@@ -117,6 +133,16 @@ class CyberPowerCoordinator(DataUpdateCoordinator[PduData]):
         )
         self.snmp = snmp
         self.host = host
+        self._base_interval = timedelta(seconds=scan_interval)
+        self._failures = 0
+
+    def _next_backoff(self) -> timedelta:
+        """Exponential backoff capped at MAX_BACKOFF_INTERVAL."""
+        seconds = min(
+            self._base_interval.total_seconds() * (2**self._failures),
+            MAX_BACKOFF_INTERVAL,
+        )
+        return timedelta(seconds=seconds)
 
     async def async_setup(self) -> None:
         """Read the static identity and topology of the PDU once."""
@@ -127,7 +153,6 @@ class CyberPowerCoordinator(DataUpdateCoordinator[PduData]):
                     OID_IDENT_FW_REV,
                     OID_IDENT_SERIAL,
                     OID_IDENT_NAME,
-                    OID_IDENT_OUTLET_COUNT,
                     OID_SYS_NAME,
                     OID_IF_PHYS_ADDRESS,
                 ]
@@ -178,6 +203,7 @@ class CyberPowerCoordinator(DataUpdateCoordinator[PduData]):
 
     async def _async_update_data(self) -> PduData:
         """Fetch outlet states and per-bank metering in one batched poll."""
+        total_bank_id = self.info.total_bank_id
         oids: list[str] = [
             f"{OID_OUTLET_STATUS_STATE}.{o.index}" for o in self.info.outlets
         ]
@@ -185,7 +211,7 @@ class CyberPowerCoordinator(DataUpdateCoordinator[PduData]):
             oids.append(f"{OID_LOAD_CURRENT}.{row}")
             oids.append(f"{OID_LOAD_VOLTAGE}.{row}")
             oids.append(f"{OID_LOAD_POWER}.{row}")
-            if bank_id == DEVICE_BANK_ID:
+            if bank_id == total_bank_id:
                 oids.append(f"{OID_LOAD_APPARENT}.{row}")
                 oids.append(f"{OID_LOAD_PF}.{row}")
                 oids.append(f"{OID_LOAD_ENERGY}.{row}")
@@ -193,7 +219,22 @@ class CyberPowerCoordinator(DataUpdateCoordinator[PduData]):
         try:
             values = await self.snmp.get(oids)
         except SnmpError as err:
+            self._failures += 1
+            self.update_interval = self._next_backoff()
+            _LOGGER.debug(
+                "PDU %s poll failed (#%d); backing off to %s",
+                self.host,
+                self._failures,
+                self.update_interval,
+            )
             raise UpdateFailed(f"Error polling PDU: {err}") from err
+
+        if self._failures:
+            _LOGGER.debug(
+                "PDU %s recovered after %d failed poll(s)", self.host, self._failures
+            )
+            self._failures = 0
+            self.update_interval = self._base_interval
 
         outlet_states = {
             o.index: as_int(values.get(f"{OID_OUTLET_STATUS_STATE}.{o.index}"))
@@ -212,7 +253,7 @@ class CyberPowerCoordinator(DataUpdateCoordinator[PduData]):
                 voltage=None if voltage is None else voltage / 10.0,
                 power=power,
             )
-            if bank_id == DEVICE_BANK_ID:
+            if bank_id == total_bank_id:
                 pf = as_int(values.get(f"{OID_LOAD_PF}.{row}"))
                 energy = as_int(values.get(f"{OID_LOAD_ENERGY}.{row}"))
                 measurement.apparent_power = as_int(

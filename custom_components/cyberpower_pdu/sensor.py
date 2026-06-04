@@ -21,7 +21,6 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DEVICE_BANK_ID
 from .coordinator import (
     BankMeasurement,
     CyberPowerConfigEntry,
@@ -123,17 +122,20 @@ async def async_setup_entry(
 ) -> None:
     """Set up metering sensors."""
     coordinator = entry.runtime_data
+    info = coordinator.info
     entities: list[CyberPowerSensor] = []
 
-    if DEVICE_BANK_ID in coordinator.info.load_rows:
+    # Whole-PDU totals come from the discovered total row (device row if present,
+    # otherwise the sole metering row on a single-bank unit).
+    if info.total_bank_id is not None:
         entities.extend(
-            CyberPowerSensor(coordinator, description, DEVICE_BANK_ID)
+            CyberPowerSensor(coordinator, description, info.total_bank_id)
             for description in DEVICE_SENSORS
         )
 
-    # Per-bank sensors only make sense when the PDU has more than one bank.
-    if len(coordinator.info.bank_ids) > 1:
-        for bank_id in coordinator.info.bank_ids:
+    # Per-bank sensors only when the PDU actually has more than one bank.
+    if len(info.bank_ids) > 1:
+        for bank_id in info.bank_ids:
             entities.extend(
                 CyberPowerSensor(coordinator, description, bank_id)
                 for description in BANK_SENSORS
@@ -158,7 +160,9 @@ class CyberPowerSensor(CyberPowerEntity, SensorEntity):
         self.entity_description = description
         self._bank_id = bank_id
         self._attr_unique_id = f"{self._device_id}_bank{bank_id}_{description.key}"
-        if bank_id != DEVICE_BANK_ID:
+        if description.translation_key and description.translation_key.startswith(
+            "bank_"
+        ):
             self._attr_translation_placeholders = {"bank": str(bank_id)}
 
     @property
