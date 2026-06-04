@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from custom_components.cyberpower_pdu import const as c
 from homeassistant.config_entries import SOURCE_DHCP, SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
+
+from custom_components.cyberpower_pdu import const as c
 
 from .conftest import FakeSnmp
 

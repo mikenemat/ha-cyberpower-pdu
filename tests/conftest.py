@@ -6,10 +6,11 @@ from collections.abc import Generator
 from typing import ClassVar
 from unittest.mock import patch
 
-from custom_components.cyberpower_pdu import const as c
-from custom_components.cyberpower_pdu.snmp import SnmpError
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.cyberpower_pdu import const as c
+from custom_components.cyberpower_pdu.snmp import SnmpError
 
 DEFAULT_MAC = b"\x00\x0c\x15\x11\x22\x33"
 DEFAULT_SERIAL = "TESTSERIAL1"

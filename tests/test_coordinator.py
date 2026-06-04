@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from custom_components.cyberpower_pdu.const import DEFAULT_SCAN_INTERVAL
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.cyberpower_pdu.const import DEFAULT_SCAN_INTERVAL
 
 from .conftest import FakeSnmp
 

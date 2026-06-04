@@ -30,3 +30,6 @@ select = [
 [tool.ruff.lint.isort]
 force-sort-within-sections = true
 combine-as-imports = true
+# Pin first-party so import grouping is identical locally and in CI regardless
+# of the working directory ruff is invoked from.
+known-first-party = ["custom_components", "tests"]
