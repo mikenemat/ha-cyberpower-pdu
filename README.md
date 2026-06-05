@@ -100,8 +100,10 @@ Go to **Settings → Devices & Services → Add Integration → CyberPower PDU**
    finds; tick the ones to add (all selected by default) and they're configured
    together in one go. Already-added PDUs are filtered out. Or choose **Enter an
    IP address manually**.
-2. **Manual entry** (always available) — host/IP, SNMP port (default `161`), and
-   SNMP version, for a single PDU.
+2. **Manual entry** (always available) — **one or more** PDU IPs (one per line, or
+   comma/space separated), plus SNMP port (default `161`) and version. All the
+   IPs you enter share the port, version, and credentials, and each becomes its
+   own device.
 3. **Credentials** — entered once and applied to every selected PDU:
    - *v1/v2c*: read community (default `public`) and write community (default `private`).
    - *v3*: username, plus optional authentication/privacy protocols and keys.
@@ -117,9 +119,10 @@ Discovery is an **active SNMP scan of your local subnet(s)** — no DHCP require
 shown behind a **progress bar** so you can see it working:
 
 1. Home Assistant's network adapters determine the local IPv4 subnet(s). The
-   adapter's **actual prefix** is used — a `/24`, `/23`, `/22`, … are each swept
-   at their real size (nothing is hardcoded); networks larger than ~a `/21` are
-   skipped to avoid scanning a huge range.
+   adapter's **actual prefix** is used — a `/24`, `/23`, or `/22` is swept at its
+   real size (nothing is hardcoded). **A `/21` or larger subnet is too big to
+   scan, so auto-discovery is skipped and the wizard goes straight to manual IP
+   entry** (where you can still paste in all your PDUs at once).
 2. The host's **ARP/neighbour table is checked first**, so only addresses that
    are actually alive get probed — no blind spraying. If the ARP cache is cold,
    it falls back to a full SNMP sweep of the subnet.

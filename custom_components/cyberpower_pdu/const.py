@@ -68,10 +68,11 @@ DISCOVERY_TIMEOUT: Final = 1.0
 DISCOVERY_RETRIES: Final = 1
 DISCOVERY_POOL_SIZE: Final = 24
 DISCOVERY_PER_ENGINE: Final = 4
-# Never sweep networks larger than this many addresses (covers up to a /21;
-# avoids accidentally scanning a huge /16). The adapter's real prefix is used —
-# a /24, /23, /22, … are all swept at their actual size, nothing is hardcoded.
-MAX_DISCOVERY_HOSTS: Final = 2048
+# Largest subnet auto-discovery will sweep: a /22 (1024 addresses). The adapter's
+# real prefix is used (a /24, /23, /22 are swept at their actual size, nothing is
+# hardcoded), but a /21 or larger is skipped — too many hosts to probe — and the
+# config flow falls back immediately to manual IP entry.
+MAX_DISCOVERY_HOSTS: Final = 1024
 
 # --- OID building blocks -----------------------------------------------------
 ENTERPRISE: Final = "1.3.6.1.4.1.3808"

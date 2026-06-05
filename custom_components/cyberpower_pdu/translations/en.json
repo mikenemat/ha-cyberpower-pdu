@@ -21,15 +21,15 @@
         }
       },
       "manual": {
-        "title": "CyberPower PDU",
-        "description": "Enter the network address of your CyberPower PDU and the SNMP version to use.",
+        "title": "Add CyberPower PDUs",
+        "description": "Enter one or more PDU IP addresses — one per line, or separated by spaces/commas. They share the port, SNMP version, and credentials you enter.",
         "data": {
-          "host": "Host",
+          "host": "IP address(es)",
           "port": "SNMP port",
           "snmp_version": "SNMP version"
         },
         "data_description": {
-          "host": "IP address or hostname of the PDU's network card.",
+          "host": "One PDU per line, or comma/space separated.",
           "snmp_version": "v1 is the simplest. Use v3 if you have configured a USM user."
         }
       },
@@ -51,7 +51,8 @@
       "cannot_connect": "Could not reach any selected PDU over SNMP. Check the address, port, and credentials.",
       "not_cyberpower": "That device responded to SNMP but is not a CyberPower PDU.",
       "cannot_identify": "The PDU did not report a serial number or MAC address, so it cannot be identified reliably.",
-      "no_devices_selected": "Select at least one PDU, or go back to enter an IP manually."
+      "no_devices_selected": "Select at least one PDU, or go back to enter an IP manually.",
+      "no_hosts": "Enter at least one IP address."
     },
     "abort": {
       "already_configured": "This PDU is already configured."

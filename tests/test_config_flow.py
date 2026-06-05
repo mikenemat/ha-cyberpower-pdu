@@ -30,11 +30,19 @@ def _register_three(fake_snmp: FakeSnmp) -> None:
     fake_snmp.extras[H3] = FakeSnmp(serial="SNCCC", mac=b"\x00\x0c\x15\x00\x00\x03")
 
 
-async def _start(hass: HomeAssistant, discovered: list[DiscoveredPdu]):
+async def _start(
+    hass: HomeAssistant, discovered: list[DiscoveredPdu], scannable: bool = True
+):
     """Start the flow and drive through the discovery progress step."""
-    with patch(
-        "custom_components.cyberpower_pdu.config_flow.async_discover_pdus",
-        new=AsyncMock(return_value=discovered),
+    with (
+        patch(
+            "custom_components.cyberpower_pdu.config_flow.async_discover_pdus",
+            new=AsyncMock(return_value=discovered),
+        ),
+        patch(
+            "custom_components.cyberpower_pdu.config_flow.async_has_scannable_networks",
+            new=AsyncMock(return_value=scannable),
+        ),
     ):
         result = await hass.config_entries.flow.async_init(
             c.DOMAIN, context={"source": SOURCE_USER}
@@ -111,6 +119,35 @@ async def test_manual_via_menu(hass: HomeAssistant, fake_snmp: FakeSnmp) -> None
         result["flow_id"], {"next_step_id": "manual"}
     )
     assert result["step_id"] == "manual"
+
+
+async def test_large_subnet_skips_to_manual(
+    hass: HomeAssistant, fake_snmp: FakeSnmp
+) -> None:
+    """A /21-or-larger subnet skips discovery and goes straight to manual entry."""
+    result = await _start(hass, [], scannable=False)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "manual"
+
+
+async def test_manual_multiple_ips(hass: HomeAssistant, fake_snmp: FakeSnmp) -> None:
+    """The manual fallback accepts several IPs and adds one entry per PDU."""
+    _register_three(fake_snmp)
+    result = await _start(hass, [], scannable=False)
+    assert result["step_id"] == "manual"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            c.CONF_HOST: f"{H1}\n{H2}, {H3}",
+            c.CONF_PORT: 161,
+            c.CONF_VERSION: c.VERSION_V1,
+        },
+    )
+    assert result["step_id"] == "credentials"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], _CREDS)
+    await hass.async_block_till_done()
+    entries = hass.config_entries.async_entries(c.DOMAIN)
+    assert {e.unique_id for e in entries} == {"SNAAA", "SNBBB", "SNCCC"}
 
 
 async def test_manual_cannot_connect(hass: HomeAssistant, fake_snmp: FakeSnmp) -> None:

@@ -99,6 +99,15 @@ def is_epdu(sys_object_id: str) -> bool:
     return sys_object_id == EPDU or sys_object_id.startswith(f"{EPDU}.")
 
 
+async def async_has_scannable_networks(hass: HomeAssistant) -> bool:
+    """True if any local subnet is small enough to scan (<= a /22).
+
+    Lets the config flow skip discovery and go straight to manual IP entry when
+    the only networks are a /21 or larger.
+    """
+    return bool(await _local_networks(hass))
+
+
 async def _probe_host(
     host: str, community: str, engine: SnmpEngine | None = None
 ) -> DiscoveredPdu | None:

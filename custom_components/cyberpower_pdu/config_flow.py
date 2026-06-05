@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from homeassistant.config_entries import (
@@ -14,6 +15,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.selector import TextSelector, TextSelectorConfig
 import voluptuous as vol
 
 from .const import (
@@ -47,12 +49,26 @@ from .const import (
     VERSION_V3,
 )
 from .coordinator import CyberPowerConfigEntry, device_unique_id
-from .discovery import DiscoveredPdu, async_discover_pdus, is_epdu
+from .discovery import (
+    DiscoveredPdu,
+    async_discover_pdus,
+    async_has_scannable_networks,
+    is_epdu,
+)
 from .snmp import CyberPowerSnmp, SnmpCredentials, SnmpError, as_mac, as_str
 
 _LOGGER = logging.getLogger(__name__)
 
 CONF_DEVICES = "devices"
+
+
+def _parse_hosts(raw: str) -> list[str]:
+    """Split a free-text field into a de-duplicated, ordered list of hosts."""
+    seen: dict[str, None] = {}
+    for token in re.split(r"[\s,;]+", raw.strip()):
+        if token:
+            seen.setdefault(token, None)
+    return list(seen)
 
 
 class CannotConnect(Exception):
@@ -126,6 +142,12 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Scan the network behind a progress bar, then offer the results."""
+        # No scannable subnet (e.g. a /21 or larger) -> skip discovery entirely
+        # and go straight to manual IP entry, rather than flashing a scan.
+        if self._discovery_task is None and not await async_has_scannable_networks(
+            self.hass
+        ):
+            return await self.async_step_manual()
         if self._discovery_task is None:
             self._discovery_task = self.hass.async_create_task(self._async_discover())
         if not self._discovery_task.done():
@@ -197,18 +219,24 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_manual(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Collect a single PDU by hand (the always-available fallback)."""
+        """Collect one or more PDUs by hand (the always-available fallback)."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            self._hosts = [user_input[CONF_HOST]]
-            self._conn = {
-                CONF_PORT: user_input[CONF_PORT],
-                CONF_VERSION: user_input[CONF_VERSION],
-            }
-            return await self.async_step_credentials()
+            hosts = _parse_hosts(user_input[CONF_HOST])
+            if hosts:
+                self._hosts = hosts
+                self._conn = {
+                    CONF_PORT: user_input[CONF_PORT],
+                    CONF_VERSION: user_input[CONF_VERSION],
+                }
+                return await self.async_step_credentials()
+            errors["base"] = "no_hosts"
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_HOST): str,
+                vol.Required(CONF_HOST): TextSelector(
+                    TextSelectorConfig(multiline=True)
+                ),
                 vol.Required(CONF_PORT, default=DEFAULT_PORT): vol.All(
                     vol.Coerce(int), vol.Range(min=1, max=65535)
                 ),
@@ -217,7 +245,7 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
                 ),
             }
         )
-        return self.async_show_form(step_id="manual", data_schema=schema)
+        return self.async_show_form(step_id="manual", data_schema=schema, errors=errors)
 
     async def async_step_credentials(
         self, user_input: dict[str, Any] | None = None
