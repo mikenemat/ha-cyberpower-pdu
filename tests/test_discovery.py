@@ -42,7 +42,7 @@ async def test_discovery_probes_arp_live_hosts(hass: HomeAssistant) -> None:
     """Only ARP-live hosts are probed; non-PDU responders are filtered out."""
     net = ipaddress.ip_network("192.0.2.0/24")
 
-    async def fake_probe(host, community, engine=None):
+    async def fake_probe(host, community, engine=None, port=161):
         if host == "192.0.2.50":
             return DiscoveredPdu(host, "00:0c:15:11:22:33", "PDU41008", "SN1")
         return None
@@ -70,7 +70,7 @@ async def test_discovery_sweeps_when_arp_cold(hass: HomeAssistant) -> None:
     """An empty ARP cache falls back to a bounded subnet sweep."""
     net = ipaddress.ip_network("192.0.2.0/29")  # .1-.6
 
-    async def fake_probe(host, community, engine=None):
+    async def fake_probe(host, community, engine=None, port=161):
         if host == "192.0.2.3":
             return DiscoveredPdu(host, "00:0c:15:00:00:03", "PDU", "S")
         return None

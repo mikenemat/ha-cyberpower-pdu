@@ -38,6 +38,7 @@ from .const import (
     DEFAULT_VERSION,
     DEFAULT_WRITE_COMMUNITY,
     DOMAIN,
+    MAX_DISCOVERY_HOSTS,
     MIN_SCAN_INTERVAL,
     OID_IDENT_MODEL,
     OID_IDENT_SERIAL,
@@ -53,13 +54,16 @@ from .discovery import (
     DiscoveredPdu,
     async_discover_pdus,
     async_has_scannable_networks,
+    async_scan_hosts,
     is_epdu,
+    parse_scan_targets,
 )
 from .snmp import CyberPowerSnmp, SnmpCredentials, SnmpError, as_mac, as_str
 
 _LOGGER = logging.getLogger(__name__)
 
 CONF_DEVICES = "devices"
+CONF_SUBNET = "subnet"
 
 
 def _parse_hosts(raw: str) -> list[str]:
@@ -122,6 +126,10 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovered: dict[str, DiscoveredPdu] = {}
         self._discovery_task: asyncio.Task[list[DiscoveredPdu]] | None = None
         self._last_progress = 0.0
+        self._scan_hosts: list[str] = []  # expanded targets for a manual subnet scan
+        self._scan_community = DEFAULT_COMMUNITY
+        self._scan_port = DEFAULT_PORT
+        self._scan_no_results = False
 
     @staticmethod
     @callback
@@ -142,12 +150,14 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Scan the network behind a progress bar, then offer the results."""
-        # No scannable subnet (e.g. a /21 or larger) -> skip discovery entirely
-        # and go straight to manual IP entry, rather than flashing a scan.
+        # No scannable subnet -> skip the auto-scan and offer the fallbacks
+        # (scan a subnet you specify, or enter IPs by hand) rather than flashing
+        # a scan. This is the common case for HA in a bridged Docker container,
+        # which can only see its own network, not the LAN.
         if self._discovery_task is None and not await async_has_scannable_networks(
             self.hass
         ):
-            return await self.async_step_manual()
+            return await self.async_step_fallback()
         if self._discovery_task is None:
             self._discovery_task = self.hass.async_create_task(self._async_discover())
         if not self._discovery_task.done():
@@ -168,7 +178,7 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovered = {
             pdu.host: pdu for pdu in discovered if not self._already_configured(pdu)
         }
-        next_step = "discovered" if self._discovered else "manual"
+        next_step = "discovered" if self._discovered else "fallback"
         return self.async_show_progress_done(next_step_id=next_step)
 
     async def _async_discover(self) -> list[DiscoveredPdu]:
@@ -187,9 +197,128 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_discovered(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Offer the discovered PDUs (bulk) or manual entry."""
+        """Offer the discovered PDUs (bulk), a subnet scan, or manual entry."""
         return self.async_show_menu(
-            step_id="discovered", menu_options=["pick", "manual"]
+            step_id="discovered", menu_options=["pick", "scan_subnet", "manual"]
+        )
+
+    async def async_step_fallback(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Offer the fallbacks when nothing could be auto-discovered.
+
+        Reached when the auto-scan found nothing or could not run at all (the
+        usual case for bridged Docker, where HA can't see the LAN subnet).
+        """
+        return self.async_show_menu(
+            step_id="fallback", menu_options=["scan_subnet", "manual"]
+        )
+
+    async def async_step_scan_subnet(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Collect a subnet/range to scan, then run the scan behind a progress bar.
+
+        Works even when HA can't enumerate the LAN itself (bridged Docker), since
+        the scan sends unicast SNMP to each address, which routes out normally.
+        """
+        errors: dict[str, str] = {}
+        if self._scan_no_results:
+            self._scan_no_results = False
+            errors["base"] = "no_devices_found"
+        if user_input is not None:
+            try:
+                hosts = parse_scan_targets(user_input[CONF_SUBNET])
+            except ValueError:
+                errors["base"] = "invalid_subnet"
+            else:
+                if len(hosts) > MAX_DISCOVERY_HOSTS:
+                    errors["base"] = "subnet_too_large"
+                else:
+                    self._scan_hosts = hosts
+                    self._scan_community = user_input[CONF_COMMUNITY]
+                    self._scan_port = user_input[CONF_PORT]
+                    self._conn = {
+                        CONF_PORT: user_input[CONF_PORT],
+                        CONF_VERSION: DEFAULT_VERSION,
+                    }
+                    # Kick off the scan and show progress. We must return the
+                    # progress result directly (not chain into scan_run): HA's
+                    # eager task factory can finish the task synchronously, and a
+                    # progress_done returned from this form-submit handler would
+                    # carry this form's user_input into the next step. Letting HA
+                    # re-enter scan_run via its done-callback avoids that.
+                    self._discovery_task = self.hass.async_create_task(
+                        self._async_scan()
+                    )
+                    return self.async_show_progress(
+                        step_id="scan_run",
+                        progress_action="discovering",
+                        progress_task=self._discovery_task,
+                    )
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_SUBNET): str,
+                vol.Required(CONF_COMMUNITY, default=DEFAULT_COMMUNITY): str,
+                vol.Required(CONF_PORT, default=DEFAULT_PORT): vol.All(
+                    vol.Coerce(int), vol.Range(min=1, max=65535)
+                ),
+            }
+        )
+        return self.async_show_form(
+            step_id="scan_subnet", data_schema=schema, errors=errors
+        )
+
+    async def async_step_scan_run(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Resolve the subnet scan once its progress task finishes.
+
+        Entered only via the progress task's done-callback (with no user_input),
+        so routing onward never leaks the scan form's input into the next step.
+        """
+        task = self._discovery_task
+        if task is not None and not task.done():
+            return self.async_show_progress(
+                step_id="scan_run",
+                progress_action="discovering",
+                progress_task=task,
+            )
+
+        try:
+            discovered = task.result() if task is not None else []
+        except Exception:  # best-effort; fall back to the form
+            _LOGGER.debug("Subnet scan failed", exc_info=True)
+            discovered = []
+        finally:
+            self._discovery_task = None
+            self._last_progress = 0.0
+
+        self._discovered = {
+            pdu.host: pdu for pdu in discovered if not self._already_configured(pdu)
+        }
+        if self._discovered:
+            return self.async_show_progress_done(next_step_id="pick")
+        self._scan_no_results = True
+        return self.async_show_progress_done(next_step_id="scan_subnet")
+
+    async def _async_scan(self) -> list[DiscoveredPdu]:
+        """Run the subnet scan, pushing throttled progress to the bar."""
+
+        def _progress(done: int, total: int) -> None:
+            if not total:
+                return
+            fraction = done / total
+            if fraction - self._last_progress >= 0.02 or done == total:
+                self._last_progress = fraction
+                self.async_update_progress(fraction)
+
+        return await async_scan_hosts(
+            self._scan_hosts,
+            community=self._scan_community,
+            port=self._scan_port,
+            progress_cb=_progress,
         )
 
     async def async_step_pick(
@@ -200,7 +329,12 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._hosts = user_input[CONF_DEVICES]
             if self._hosts:
-                self._conn = {CONF_PORT: DEFAULT_PORT, CONF_VERSION: DEFAULT_VERSION}
+                # Auto-discovery uses defaults; a subnet scan may have set a
+                # custom port/community, so keep self._conn if already populated.
+                self._conn = self._conn or {
+                    CONF_PORT: DEFAULT_PORT,
+                    CONF_VERSION: DEFAULT_VERSION,
+                }
                 return await self.async_step_credentials()
             errors["base"] = "no_devices_selected"
 

@@ -7,10 +7,11 @@ from unittest.mock import AsyncMock, patch
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+import pytest
 
 from custom_components.cyberpower_pdu import const as c
-from custom_components.cyberpower_pdu.config_flow import CONF_DEVICES
-from custom_components.cyberpower_pdu.discovery import DiscoveredPdu
+from custom_components.cyberpower_pdu.config_flow import CONF_DEVICES, CONF_SUBNET
+from custom_components.cyberpower_pdu.discovery import DiscoveredPdu, parse_scan_targets
 
 from .conftest import FakeSnmp
 
@@ -30,6 +31,17 @@ def _register_three(fake_snmp: FakeSnmp) -> None:
     fake_snmp.extras[H3] = FakeSnmp(serial="SNCCC", mac=b"\x00\x0c\x15\x00\x00\x03")
 
 
+async def _advance(hass: HomeAssistant, result: dict):
+    """Drive a flow through any progress steps until it needs input."""
+    while result["type"] in (
+        FlowResultType.SHOW_PROGRESS,
+        FlowResultType.SHOW_PROGRESS_DONE,
+    ):
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    return result
+
+
 async def _start(
     hass: HomeAssistant, discovered: list[DiscoveredPdu], scannable: bool = True
 ):
@@ -47,13 +59,18 @@ async def _start(
         result = await hass.config_entries.flow.async_init(
             c.DOMAIN, context={"source": SOURCE_USER}
         )
-        while result["type"] in (
-            FlowResultType.SHOW_PROGRESS,
-            FlowResultType.SHOW_PROGRESS_DONE,
-        ):
-            await hass.async_block_till_done()
-            result = await hass.config_entries.flow.async_configure(result["flow_id"])
-        return result
+        return await _advance(hass, result)
+
+
+async def _open_manual(hass: HomeAssistant, result: dict):
+    """From the fallback menu, open the manual-entry form."""
+    assert result["type"] is FlowResultType.MENU
+    assert result["step_id"] == "fallback"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "manual"}
+    )
+    assert result["step_id"] == "manual"
+    return result
 
 
 async def test_bulk_add_all_discovered(
@@ -99,10 +116,9 @@ async def test_bulk_add_subset(hass: HomeAssistant, fake_snmp: FakeSnmp) -> None
 async def test_no_devices_falls_back_to_manual(
     hass: HomeAssistant, fake_snmp: FakeSnmp
 ) -> None:
-    """With nothing discovered, the flow drops straight to manual entry."""
+    """With nothing discovered, the flow offers the fallback menu -> manual."""
     result = await _start(hass, [])
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual"
+    result = await _open_manual(hass, result)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], _MANUAL_CONN
     )
@@ -121,20 +137,20 @@ async def test_manual_via_menu(hass: HomeAssistant, fake_snmp: FakeSnmp) -> None
     assert result["step_id"] == "manual"
 
 
-async def test_large_subnet_skips_to_manual(
+async def test_large_subnet_skips_to_fallback(
     hass: HomeAssistant, fake_snmp: FakeSnmp
 ) -> None:
-    """A /21-or-larger subnet skips discovery and goes straight to manual entry."""
+    """A /21-or-larger subnet skips the auto-scan and offers the fallback menu."""
     result = await _start(hass, [], scannable=False)
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual"
+    assert result["type"] is FlowResultType.MENU
+    assert result["step_id"] == "fallback"
 
 
 async def test_manual_multiple_ips(hass: HomeAssistant, fake_snmp: FakeSnmp) -> None:
     """The manual fallback accepts several IPs and adds one entry per PDU."""
     _register_three(fake_snmp)
     result = await _start(hass, [], scannable=False)
-    assert result["step_id"] == "manual"
+    result = await _open_manual(hass, result)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {
@@ -154,6 +170,7 @@ async def test_manual_multiple_ips(hass: HomeAssistant, fake_snmp: FakeSnmp) -> 
 async def test_manual_cannot_connect(hass: HomeAssistant, fake_snmp: FakeSnmp) -> None:
     """SNMP failure during manual setup surfaces cannot_connect."""
     result = await _start(hass, [])
+    result = await _open_manual(hass, result)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], _MANUAL_CONN
     )
@@ -161,3 +178,98 @@ async def test_manual_cannot_connect(hass: HomeAssistant, fake_snmp: FakeSnmp) -
     result = await hass.config_entries.flow.async_configure(result["flow_id"], _CREDS)
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
+
+
+def _open_scan(hass: HomeAssistant, result: dict):
+    """From the fallback menu, open the subnet-scan form."""
+    return hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "scan_subnet"}
+    )
+
+
+async def test_scan_subnet_finds_and_adds(
+    hass: HomeAssistant, fake_snmp: FakeSnmp
+) -> None:
+    """A user-specified subnet scan surfaces PDUs that auto-discovery can't see."""
+    _register_three(fake_snmp)
+    result = await _start(hass, [])  # fallback menu (nothing auto-discovered)
+    result = await _open_scan(hass, result)
+    assert result["step_id"] == "scan_subnet"
+    with patch(
+        "custom_components.cyberpower_pdu.config_flow.async_scan_hosts",
+        new=AsyncMock(return_value=_DISCOVERED),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_SUBNET: "192.0.2.0/24", c.CONF_COMMUNITY: "public", c.CONF_PORT: 161},
+        )
+        result = await _advance(hass, result)
+    assert result["step_id"] == "pick"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_DEVICES: [H1, H2, H3]}
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], _CREDS)
+    await hass.async_block_till_done()
+    entries = hass.config_entries.async_entries(c.DOMAIN)
+    assert {e.unique_id for e in entries} == {"SNAAA", "SNBBB", "SNCCC"}
+
+
+async def test_scan_subnet_invalid(hass: HomeAssistant, fake_snmp: FakeSnmp) -> None:
+    """A malformed subnet is rejected with a clear error."""
+    result = await _start(hass, [])
+    result = await _open_scan(hass, result)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_SUBNET: "not-an-ip", c.CONF_COMMUNITY: "public", c.CONF_PORT: 161},
+    )
+    assert result["step_id"] == "scan_subnet"
+    assert result["errors"] == {"base": "invalid_subnet"}
+
+
+async def test_scan_subnet_too_large(hass: HomeAssistant, fake_snmp: FakeSnmp) -> None:
+    """A range larger than the cap is rejected rather than swept."""
+    result = await _start(hass, [])
+    result = await _open_scan(hass, result)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_SUBNET: "10.0.0.0/20", c.CONF_COMMUNITY: "public", c.CONF_PORT: 161},
+    )
+    assert result["step_id"] == "scan_subnet"
+    assert result["errors"] == {"base": "subnet_too_large"}
+
+
+async def test_scan_subnet_no_results(hass: HomeAssistant, fake_snmp: FakeSnmp) -> None:
+    """A scan that finds nothing returns to the form with a notice."""
+    result = await _start(hass, [])
+    result = await _open_scan(hass, result)
+    with patch(
+        "custom_components.cyberpower_pdu.config_flow.async_scan_hosts",
+        new=AsyncMock(return_value=[]),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_SUBNET: "192.0.2.0/24", c.CONF_COMMUNITY: "public", c.CONF_PORT: 161},
+        )
+        result = await _advance(hass, result)
+    assert result["step_id"] == "scan_subnet"
+    assert result["errors"] == {"base": "no_devices_found"}
+
+
+def test_parse_scan_targets() -> None:
+    """The target parser accepts CIDRs, ranges, shorthands, and single IPs."""
+    assert parse_scan_targets("192.0.2.5") == ["192.0.2.5"]
+    assert len(parse_scan_targets("192.0.2.0/24")) == 254
+    assert parse_scan_targets("192.0.2.10-192.0.2.12") == [
+        "192.0.2.10",
+        "192.0.2.11",
+        "192.0.2.12",
+    ]
+    assert parse_scan_targets("192.0.2.10-12") == [
+        "192.0.2.10",
+        "192.0.2.11",
+        "192.0.2.12",
+    ]
+    with pytest.raises(ValueError):
+        parse_scan_targets("nope")
+    with pytest.raises(ValueError):
+        parse_scan_targets("")

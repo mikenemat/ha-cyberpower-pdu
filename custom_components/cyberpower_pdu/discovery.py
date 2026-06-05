@@ -108,13 +108,46 @@ async def async_has_scannable_networks(hass: HomeAssistant) -> bool:
     return bool(await _local_networks(hass))
 
 
+def parse_scan_targets(text: str) -> list[str]:
+    """Expand a user-supplied subnet/range into a list of host IPs.
+
+    Accepts a CIDR (``192.168.3.0/24``), an inclusive range
+    (``192.168.3.10-192.168.3.50`` or the last-octet shorthand
+    ``192.168.3.10-50``), or a single address. Raises ``ValueError`` on
+    anything it cannot parse.
+    """
+    text = text.strip()
+    if not text:
+        raise ValueError("empty target")
+    if "/" in text:
+        net = ipaddress.ip_network(text, strict=False)
+        hosts = list(net.hosts())
+        return [str(h) for h in (hosts or [net.network_address])]
+    if "-" in text:
+        start_s, end_s = (part.strip() for part in text.split("-", 1))
+        start = ipaddress.ip_address(start_s)
+        if "." in end_s:
+            end = ipaddress.ip_address(end_s)
+        else:  # last-octet shorthand: 192.168.3.10-50
+            prefix = start_s.rsplit(".", 1)[0]
+            end = ipaddress.ip_address(f"{prefix}.{end_s}")
+        if int(end) < int(start):
+            raise ValueError("range end precedes start")
+        return [str(ipaddress.ip_address(i)) for i in range(int(start), int(end) + 1)]
+    ipaddress.ip_address(text)  # validate single host
+    return [text]
+
+
 async def _probe_host(
-    host: str, community: str, engine: SnmpEngine | None = None
+    host: str,
+    community: str,
+    engine: SnmpEngine | None = None,
+    port: int = DEFAULT_PORT,
 ) -> DiscoveredPdu | None:
     """SNMP-probe one host; return a DiscoveredPdu only if it is a PDU."""
     snmp = CyberPowerSnmp(
         host,
-        DEFAULT_PORT,
+        port,
         SnmpCredentials(version=VERSION_V1, community=community),
         timeout=DISCOVERY_TIMEOUT,
         retries=DISCOVERY_RETRIES,
@@ -166,10 +199,29 @@ async def async_discover_pdus(
         for net in networks:
             candidates.update(str(host) for host in net.hosts())
 
-    hosts = list(candidates)
+    found = await _probe_hosts(list(candidates), community, progress_cb=progress_cb)
+
+    # Backfill MAC from ARP when SNMP did not provide one.
+    for pdu in found:
+        if not pdu.mac and pdu.host in arp:
+            pdu.mac = arp[pdu.host]
+    _LOGGER.debug(
+        "Discovery probed %d candidate(s), found %d PDU(s)", len(candidates), len(found)
+    )
+    return found
+
+
+async def _probe_hosts(
+    hosts: list[str],
+    community: str,
+    port: int = DEFAULT_PORT,
+    progress_cb: Callable[[int, int], None] | None = None,
+) -> list[DiscoveredPdu]:
+    """SNMP-probe an explicit list of hosts using a pool of shared engines."""
     total = len(hosts)
+    if not total:
+        return []
     done = 0
-    # A pool of shared engines, each capped to a few concurrent probes.
     pool_size = min(DISCOVERY_POOL_SIZE, total) or 1
     engines = [SnmpEngine() for _ in range(pool_size)]
     sems = [asyncio.Semaphore(DISCOVERY_PER_ENGINE) for _ in range(pool_size)]
@@ -178,14 +230,14 @@ async def async_discover_pdus(
         nonlocal done
         slot = index % pool_size
         async with sems[slot]:
-            result = await _probe_host(host, community, engines[slot])
+            result = await _probe_host(host, community, engines[slot], port)
         done += 1
         if progress_cb is not None:
             progress_cb(done, total)
         return result
 
     try:
-        found = [
+        return [
             pdu
             for pdu in await asyncio.gather(
                 *(_bounded(i, host) for i, host in enumerate(hosts))
@@ -196,14 +248,20 @@ async def async_discover_pdus(
         for engine in engines:
             engine.close_dispatcher()
 
-    # Backfill MAC from ARP when SNMP did not provide one.
-    for pdu in found:
-        if not pdu.mac and pdu.host in arp:
-            pdu.mac = arp[pdu.host]
-    _LOGGER.debug(
-        "Discovery probed %d candidate(s), found %d PDU(s)", len(candidates), len(found)
-    )
-    return found
+
+async def async_scan_hosts(
+    hosts: list[str],
+    community: str = DEFAULT_COMMUNITY,
+    port: int = DEFAULT_PORT,
+    progress_cb: Callable[[int, int], None] | None = None,
+) -> list[DiscoveredPdu]:
+    """Scan an explicit list of hosts (e.g. a user-specified subnet).
+
+    Unlike :func:`async_discover_pdus`, this does not depend on Home Assistant
+    being able to enumerate the local subnet — so it works from a bridged Docker
+    container, where unicast SNMP still routes out to the LAN.
+    """
+    return await _probe_hosts(hosts, community, port, progress_cb)
 
 
 async def async_find_host_for_mac(

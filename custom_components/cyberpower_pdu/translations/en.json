@@ -7,10 +7,32 @@
     "step": {
       "discovered": {
         "title": "CyberPower PDU",
-        "description": "PDUs found on your network are listed below, or add one by IP address.",
+        "description": "PDUs found on your network are listed below. You can also scan a specific subnet or add PDUs by IP address.",
         "menu_options": {
           "pick": "Add discovered PDUs",
-          "manual": "Enter an IP address manually"
+          "scan_subnet": "Scan a specific subnet",
+          "manual": "Enter IP addresses manually"
+        }
+      },
+      "fallback": {
+        "title": "Add CyberPower PDUs",
+        "description": "No PDUs were found automatically. This is expected when Home Assistant runs in a Docker container with bridge networking (it can only see its own network, not your LAN) or when your subnet is too large to sweep. You can scan a specific subnet, or add PDUs by IP address. For automatic discovery, run Home Assistant with host or macvlan networking.",
+        "menu_options": {
+          "scan_subnet": "Scan a specific subnet",
+          "manual": "Enter IP addresses manually"
+        }
+      },
+      "scan_subnet": {
+        "title": "Scan a subnet",
+        "description": "Enter the subnet or address range where your PDUs live. Each address is probed with unicast SNMP, so this works even when Home Assistant can't see your LAN directly (e.g. bridged Docker).",
+        "data": {
+          "subnet": "Subnet or range",
+          "community": "Read community",
+          "port": "SNMP port"
+        },
+        "data_description": {
+          "subnet": "A CIDR (192.168.1.0/24), a range (192.168.1.10-192.168.1.50 or 192.168.1.10-50), or a single address.",
+          "community": "SNMP v1 read community used for the scan (default: public)."
         }
       },
       "pick": {
@@ -52,7 +74,10 @@
       "not_cyberpower": "That device responded to SNMP but is not a CyberPower PDU.",
       "cannot_identify": "The PDU did not report a serial number or MAC address, so it cannot be identified reliably.",
       "no_devices_selected": "Select at least one PDU, or go back to enter an IP manually.",
-      "no_hosts": "Add at least one IP address or hostname."
+      "no_hosts": "Add at least one IP address or hostname.",
+      "invalid_subnet": "That doesn't look like a valid subnet, range, or IP address.",
+      "subnet_too_large": "That range is too large to scan. Use a /22 or smaller (up to 1024 addresses).",
+      "no_devices_found": "No CyberPower PDUs responded in that subnet. Check the range and read community, or add PDUs by IP."
     },
     "abort": {
       "already_configured": "This PDU is already configured."

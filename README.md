@@ -132,18 +132,28 @@ shown behind a **progress bar** so you can see it working:
    run on a pool of SNMP engines, so a cold full sweep is quick (~10 s for a
    `/24`, ~30 s for a `/22`).
 
-> **⚠️ Running Home Assistant in Docker?** Discovery scans the network of the
-> **container's own** interface. With the default **bridge** network that's the
-> Docker subnet (e.g. `172.x`), *not* your LAN, so the scan won't find PDUs and
-> (because that subnet is large) the wizard drops straight to manual entry with
-> no progress bar. To make discovery see your LAN, run the container with
-> `network_mode: host` or a **macvlan** network. Otherwise just use **manual
-> entry** — unicast SNMP to a LAN IP still routes out of a bridged container, so
-> manually-added PDUs work normally. The same applies to HA in an LXC/VM that
-> isn't bridged onto your LAN.
+> **⚠️ Running Home Assistant in Docker?** *Automatic* discovery scans the
+> network of the **container's own** interface. With the default **bridge**
+> network that's the Docker subnet (e.g. `172.x`), *not* your LAN. This is a
+> Home Assistant-wide limitation — HA itself can only enumerate the interfaces
+> inside the container, and raises a "host networking" repair issue when it
+> detects this — so the auto-scan can't see your PDUs and the wizard skips
+> straight to the fallback options. Three ways forward:
+>
+> 1. **Scan a specific subnet** *(recommended for Docker)* — the wizard's
+>    **“Scan a specific subnet”** option sweeps a CIDR/range you type
+>    (`192.168.1.0/24`, `192.168.1.10-50`, …). It works from a bridged container
+>    because each probe is **unicast** SNMP, which routes out to the LAN normally.
+> 2. **Enter IP addresses manually** — add each PDU by IP (also works from a
+>    bridged container).
+> 3. **Run HA with `network_mode: host` or a macvlan network** — then *automatic*
+>    discovery sees your LAN, exactly like a HAOS or bare-metal install.
+>
+> The same applies to HA in an LXC/VM that isn't bridged onto your LAN.
 
-Manual IP entry is always available for PDUs the scan can't reach (static IP on a
-different segment, a non-`public` read community, etc.).
+Both fallbacks (subnet scan and manual entry) are always available for PDUs the
+auto-scan can't reach — a static IP on another segment, a non-`public` read
+community, or a deployment where HA can't see the LAN.
 
 ### Options
 
@@ -194,9 +204,10 @@ the totals only. Energy feeds the Home Assistant **Energy dashboard**.
 
 - **Auto-discovery finds nothing (no progress bar, no devices)** → almost always
   Home Assistant is in a **Docker container on the default bridge network**, so it
-  only sees the Docker subnet, not your LAN. Run HA with `network_mode: host` or a
-  macvlan for discovery to work, **or** just add PDUs via **Enter an IP address
-  manually** — that works regardless of container networking.
+  only sees the Docker subnet, not your LAN. Use the wizard's **“Scan a specific
+  subnet”** option (type your LAN's CIDR, e.g. `192.168.1.0/24`) or **“Enter IP
+  addresses manually”** — both work regardless of container networking. For
+  *automatic* discovery, run HA with `network_mode: host` or a macvlan network.
 - **Outlets show state but won't switch** → the **write community** (v1/v2c) or the
   v3 user lacks write access. Fix it on the PDU, then reload the entry (or remove
   and re-add the PDU if you changed the community name).
