@@ -163,9 +163,21 @@ async def async_find_host_for_mac(
     hass: HomeAssistant, mac: str, community: str = DEFAULT_COMMUNITY
 ) -> str | None:
     """Return the current IP of the PDU with the given MAC, if found."""
-    target = mac.lower()
+    return await async_find_host_for_device(hass, None, mac, community)
+
+
+async def async_find_host_for_device(
+    hass: HomeAssistant,
+    serial: str | None,
+    mac: str | None,
+    community: str = DEFAULT_COMMUNITY,
+) -> str | None:
+    """Return the current IP of the PDU identified by serial or MAC, if found."""
+    mac_target = mac.lower() if mac else None
     for pdu in await async_discover_pdus(hass, community):
-        if pdu.mac and pdu.mac.lower() == target:
+        if serial and pdu.serial == serial:
+            return pdu.host
+        if mac_target and pdu.mac and pdu.mac.lower() == mac_target:
             return pdu.host
     return None
 

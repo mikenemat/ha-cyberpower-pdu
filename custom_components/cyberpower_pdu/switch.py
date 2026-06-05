@@ -45,12 +45,24 @@ class CyberPowerOutletSwitch(CyberPowerEntity, SwitchEntity):
         """Initialize the outlet switch."""
         super().__init__(coordinator)
         self._outlet = outlet
-        self._attr_name = outlet.name
+        # Identity is tied to the immutable outlet index, so renaming the outlet
+        # on the PDU never recreates or breaks this entity.
         self._attr_unique_id = f"{self._device_id}_outlet_{outlet.index}"
         self._attr_extra_state_attributes = {
             "outlet_number": outlet.index,
             "bank": outlet.bank,
         }
+
+    @property
+    def name(self) -> str:
+        """Live outlet label from the PDU (composed with the device name).
+
+        Reading it from each poll lets a relabel on the PDU flow straight through
+        to the friendly name without recreating the entity.
+        """
+        return self.coordinator.data.outlet_names.get(
+            self._outlet.index, f"Outlet {self._outlet.index}"
+        )
 
     @property
     def is_on(self) -> bool | None:

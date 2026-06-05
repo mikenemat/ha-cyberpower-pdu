@@ -44,6 +44,7 @@ class FakeSnmp:
         self.not_cyberpower = False
         self.sets: list[tuple[str, int]] = []
         self.closed = False
+        self.walk_calls = 0
         self._serial = serial
         self._mac = mac
         self._model = model
@@ -71,6 +72,7 @@ class FakeSnmp:
             c.OID_IDENT_NAME: self._model,
             c.OID_SYS_NAME: self._model,
             c.OID_IF_PHYS_ADDRESS: self._mac,
+            c.OID_IDENT_OUTLET_COUNT: len(self._outlets),
         }
 
     def _meter(self, oid: str) -> object | None:
@@ -100,6 +102,9 @@ class FakeSnmp:
                 out[oid] = scalars[oid]
             elif oid.startswith(f"{c.OID_OUTLET_STATUS_STATE}."):
                 out[oid] = self._state.get(int(oid.rsplit(".", 1)[-1]))
+            elif oid.startswith(f"{c.OID_OUTLET_STATUS_NAME}."):
+                idx = int(oid.rsplit(".", 1)[-1])
+                out[oid] = self._outlets.get(idx, (f"Outlet {idx}", 0))[0]
             else:
                 out[oid] = self._meter(oid)
         return out
@@ -107,6 +112,7 @@ class FakeSnmp:
     async def walk(self, base_oid: str) -> dict[str, object]:
         if self.fail:
             raise SnmpError("boom")
+        self.walk_calls += 1
         if base_oid == c.OID_OUTLET_STATUS_NAME:
             return {f"{base_oid}.{i}": n for i, (n, _b) in self._outlets.items()}
         if base_oid == c.OID_OUTLET_STATUS_BANK:

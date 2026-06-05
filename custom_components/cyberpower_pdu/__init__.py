@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 
 from .const import (
     CONF_AUTH_KEY,
@@ -22,6 +23,8 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_VERSION,
     DEFAULT_WRITE_COMMUNITY,
+    DOMAIN,
+    STORAGE_VERSION,
 )
 from .coordinator import CyberPowerConfigEntry, CyberPowerCoordinator
 from .snmp import CyberPowerSnmp, SnmpCredentials
@@ -78,3 +81,8 @@ async def _async_reload_entry(
 ) -> None:
     """Reload the entry when options change."""
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: CyberPowerConfigEntry) -> None:
+    """Delete the cached topology when the PDU is removed."""
+    await Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}").async_remove()

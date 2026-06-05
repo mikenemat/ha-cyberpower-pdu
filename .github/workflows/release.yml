@@ -1,0 +1,33 @@
+name: Release
+
+# When the manifest version is bumped on main, publish a matching GitHub release
+# and tag. HACS surfaces that release to users as an available update, and the
+# manifest version is what Home Assistant shows as the installed version.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Read manifest version
+        id: ver
+        run: |
+          version=$(jq -r .version custom_components/cyberpower_pdu/manifest.json)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Create release if the tag does not exist yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ steps.ver.outputs.version }}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists; nothing to do."
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --title "$tag" --generate-notes
+          fi

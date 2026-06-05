@@ -6,6 +6,9 @@ from typing import Final
 
 DOMAIN: Final = "cyberpower_pdu"
 
+# Bump when the cached-topology storage schema changes.
+STORAGE_VERSION: Final = 1
+
 # --- Config entry keys -------------------------------------------------------
 CONF_HOST: Final = "host"
 CONF_PORT: Final = "port"

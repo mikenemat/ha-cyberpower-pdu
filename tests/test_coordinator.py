@@ -54,7 +54,7 @@ async def test_self_heal_updates_ip_on_move(
     coordinator = config_entry.runtime_data
 
     with patch(
-        "custom_components.cyberpower_pdu.coordinator.async_find_host_for_mac",
+        "custom_components.cyberpower_pdu.coordinator.async_find_host_for_device",
         new=AsyncMock(return_value="192.0.2.250"),
     ) as find:
         fake_snmp.fail = True
@@ -67,3 +67,20 @@ async def test_self_heal_updates_ip_on_move(
 
     find.assert_awaited()
     assert config_entry.data[c.CONF_HOST] == "192.0.2.250"
+
+
+async def test_topology_cached_across_reload(
+    hass: HomeAssistant, fake_snmp: FakeSnmp, config_entry: MockConfigEntry
+) -> None:
+    """Topology is walked once and reused from cache on reload (same serial)."""
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    walks_after_setup = fake_snmp.walk_calls
+    assert walks_after_setup == 2  # outlet-bank walk + load-table walk
+
+    assert await hass.config_entries.async_reload(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # No further walks — the structure came from the per-serial cache.
+    assert fake_snmp.walk_calls == walks_after_setup

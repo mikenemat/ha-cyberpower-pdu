@@ -97,8 +97,10 @@ Go to **Settings → Devices & Services → Add Integration → CyberPower PDU**
    - *v1/v2c*: read community (default `public`) and write community (default `private`).
    - *v3*: username, plus optional authentication/privacy protocols and keys.
 
-The integration confirms the device is a CyberPower PDU and identifies it by MAC
-(falling back to serial), so the same PDU is never added twice.
+The integration identifies each PDU by its **serial number** (falling back to
+MAC) — **never by IP** — so the same unit is never added twice and a changed IP
+never creates a duplicate. The physical topology is read once and cached per
+serial, so reloads never re-derive (and never drop) your existing entities.
 
 ### Discovery
 
@@ -123,9 +125,13 @@ different segment, a non-`public` read community, etc.).
 One Home Assistant **device** per PDU, with:
 
 ### Switches
-- One `switch` per outlet (named from the outlet's label on the PDU). Each carries
-  `outlet_number` and `bank` attributes. Toggling is optimistic and reconciled by a
-  follow-up poll.
+- One `switch` per outlet, named **`<device name> <outlet label>`** from the PDU
+  (e.g. *theater-pdu-3 LED*). Each carries `outlet_number` and `bank` attributes.
+  Toggling is optimistic and reconciled by a follow-up poll.
+- Outlet labels (and the device name) are read every poll, so renaming an outlet
+  in the PDU admin flows straight through to Home Assistant. The entity's internal
+  ID is tied to the **immutable outlet index**, so a relabel never recreates the
+  entity, breaks history, or disturbs your own customisations.
 
 ### Sensors
 
@@ -183,6 +189,13 @@ pytest
 
 Tests use [`pytest-homeassistant-custom-component`] with a fake SNMP backend, so no
 hardware is needed for CI.
+
+### Releasing
+
+Bump `version` in `custom_components/cyberpower_pdu/manifest.json` (semver) in the
+release commit. On push to `main`, the **Release** workflow tags and publishes a
+matching `vX.Y.Z` GitHub release — HACS surfaces that as an available update, and
+the manifest version is what Home Assistant shows as installed.
 
 ## License
 

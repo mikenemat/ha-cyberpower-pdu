@@ -11,7 +11,6 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.core import callback
-from homeassistant.helpers.device_registry import format_mac
 import voluptuous as vol
 
 from .const import (
@@ -44,7 +43,7 @@ from .const import (
     SNMP_VERSIONS,
     VERSION_V3,
 )
-from .coordinator import CyberPowerConfigEntry
+from .coordinator import CyberPowerConfigEntry, device_unique_id
 from .discovery import DiscoveredPdu, async_discover_pdus
 from .snmp import CyberPowerSnmp, SnmpCredentials, SnmpError, as_mac, as_str
 
@@ -113,12 +112,11 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
         return CyberPowerOptionsFlow()
 
     def _already_configured(self, pdu: DiscoveredPdu) -> bool:
-        """True if a discovered PDU matches an existing entry (by MAC or host)."""
-        entries = self._async_current_entries()
-        hosts = {entry.data.get(CONF_HOST) for entry in entries}
-        unique_ids = {entry.unique_id for entry in entries}
-        unique_id = format_mac(pdu.mac) if pdu.mac else (pdu.serial or pdu.host)
-        return pdu.host in hosts or unique_id in unique_ids
+        """True if a discovered PDU matches an existing entry (by serial/MAC)."""
+        unique_id = device_unique_id(pdu.serial, pdu.mac)
+        if unique_id is None:
+            return False
+        return unique_id in {entry.unique_id for entry in self._async_current_entries()}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -202,16 +200,18 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
             except NotCyberPower:
                 errors["base"] = "not_cyberpower"
             else:
-                unique_id = format_mac(info["mac"]) if info["mac"] else None
-                unique_id = unique_id or info["serial"] or data[CONF_HOST]
-                await self.async_set_unique_id(unique_id, raise_on_progress=False)
-                self._abort_if_unique_id_configured(
-                    updates={CONF_HOST: data[CONF_HOST]}
-                )
-                title = info["model"]
-                if info["serial"]:
-                    title = f"{info['model']} ({info['serial']})"
-                return self.async_create_entry(title=title, data=data)
+                unique_id = device_unique_id(info["serial"], info["mac"])
+                if unique_id is None:
+                    errors["base"] = "cannot_identify"
+                else:
+                    await self.async_set_unique_id(unique_id, raise_on_progress=False)
+                    self._abort_if_unique_id_configured(
+                        updates={CONF_HOST: data[CONF_HOST]}
+                    )
+                    title = info["model"]
+                    if info["serial"]:
+                        title = f"{info['model']} ({info['serial']})"
+                    return self.async_create_entry(title=title, data=data)
 
         return self.async_show_form(
             step_id="credentials",

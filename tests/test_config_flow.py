@@ -50,7 +50,8 @@ async def test_discovery_pick_and_create(
     result = await hass.config_entries.flow.async_configure(result["flow_id"], _CREDS)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][c.CONF_HOST] == "192.0.2.50"
-    assert result["result"].unique_id == "00:0c:15:11:22:33"
+    # Identity is the serial number, never the IP.
+    assert result["result"].unique_id == "TESTSERIAL1"
 
 
 async def test_no_devices_falls_back_to_manual(

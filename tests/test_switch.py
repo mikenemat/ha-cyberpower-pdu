@@ -73,3 +73,25 @@ async def test_other_outlets_on(
     state = hass.states.get(outlet1)
     assert state.state == STATE_ON
     assert state.attributes["bank"] == 1
+
+
+async def test_outlet_label_passthrough(
+    hass: HomeAssistant, fake_snmp: FakeSnmp, config_entry: MockConfigEntry
+) -> None:
+    """Relabelling an outlet on the PDU updates the name without recreating it."""
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    led = await _entity_for_outlet(hass, config_entry, 12)
+    assert hass.states.get(led).attributes["friendly_name"] == "PDU41008 LED"
+
+    # Relabel outlet 12 on the PDU, then poll again.
+    fake_snmp._outlets[12] = ("Lava Lamp", 2)
+    await config_entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+
+    state = hass.states.get(led)
+    # Same entity_id (tied to the index), updated friendly name.
+    assert led.endswith("_led")
+    assert state.attributes["friendly_name"] == "PDU41008 Lava Lamp"

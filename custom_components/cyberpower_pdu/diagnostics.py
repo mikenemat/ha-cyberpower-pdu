@@ -31,6 +31,8 @@ async def async_get_config_entry_diagnostics(
             "options": dict(entry.options),
         },
         "info": {
+            "device_id": coordinator.device_id,
+            "device_name": coordinator.device_name,
             "model": coordinator.info.model,
             "firmware": coordinator.info.firmware,
             "serial": coordinator.info.serial,
@@ -42,6 +44,7 @@ async def async_get_config_entry_diagnostics(
         },
         "data": {
             "outlet_states": data.outlet_states,
+            "outlet_names": data.outlet_names,
             "banks": {bank: asdict(m) for bank, m in data.banks.items()},
         },
     }
