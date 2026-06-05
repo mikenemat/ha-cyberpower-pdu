@@ -29,26 +29,49 @@ The PDU offers telnet, an HTTP web UI, and SNMP. This integration uses **SNMP**:
 
 ## Supported devices
 
-| | |
-|---|---|
-| Verified | CyberPower **PDU41008** (firmware 1.2.4) |
-| Should work | CyberPower switched/switched-metered ePDUs exposing `CPS-MIB` outlet control + load tables |
-| Discovery | DHCP (CyberPower OUI `00:0C:15`) + manual IP |
+Only the **PDU41008** has been verified against real hardware. The integration
+speaks the CyberPower **CPS ePDU MIB** (`1.3.6.1.4.1.3808.1.1.3`), so any
+CyberPower **switched** PDU with a built-in network/management port that exposes
+the same outlet-control and load tables should work. Outlet count and bank
+layout are auto-detected, so single- and multi-bank units are both handled.
 
-> The integration auto-discovers the number of outlets and banks, so single-bank
-> and multi-bank models are both handled.
+**Expected to be compatible** — CyberPower *Switched* PDUs:
+
+- **Switched** (`PDU41xxx` series) — e.g. PDU41005, **PDU41008 ✅ (verified)**
+- **Switched Metered-by-Outlet** (`PDU81xxx` series) — e.g. PDU81005, PDU81008
+  (per-outlet metering isn't surfaced; on/off + bank/total power are)
+
+**Not supported** — CyberPower *Metered* or *Monitored* (non-switched) PDUs:
+they report power but have no outlet-control table, so on/off isn't possible.
+
+> Everything except the PDU41008 is inferred from the shared MIB and not yet
+> tested. If you try another model, please [open an issue][issues] (success or
+> failure) so this list can grow.
 
 ## Before you start: enable SNMP on the PDU
 
-In the PDU web UI (or CLI), under **Network → SNMPv1** (or **SNMPv3**):
+SNMP must be enabled on the PDU's management card. The steps below are for the
+**PDU Remote Management** web UI (ePDU firmware, verified on a PDU41008); exact
+menu wording varies a little between firmware versions. The telnet/SSH console
+exposes the identical settings via the `snmpv1` / `snmpv3` commands.
 
-1. **Enable SNMPv1** (or SNMPv3).
-2. For SNMPv1, make sure there is a community with **read access** (default
-   `public`) and, to control outlets, a community with **write access**
-   (commonly `private`). Note both — you'll enter them during setup.
-3. For SNMPv3, create a user and note the username and any auth/priv settings.
+1. Browse to `http://<pdu-ip>/` and sign in with an **Administrator** account.
+2. Open **System → Network Service → SNMPv1 Service** (some firmware: **Network → SNMP**).
+3. Set **SNMPv1 Service** to **Enable**.
+4. In the community table, configure at least one community — and, for outlet
+   control, a writable one:
+   - a **Read** community — e.g. `public` (used for monitoring and discovery)
+   - a **Read/Write** community — e.g. `private` (**required to switch outlets**)
+   - set the allowed NMS / host to `0.0.0.0` (any) or your Home Assistant IP
+5. **Apply** the changes.
 
-Read-only SNMP is enough for monitoring; **outlet control requires write access**.
+Prefer SNMPv3? Open **System → Network Service → SNMPv3 Service**, add a user,
+and note its username plus any authentication/privacy protocols and keys.
+
+> 🔒 Monitoring needs only **Read** access. **Outlet control requires a
+> Read/Write community (v1/v2c) or a read-write SNMPv3 user.** Auto-discovery
+> probes with the `public` read community, so keeping a `public` read community
+> enabled lets the network scan find the PDU.
 
 ## Installation
 
@@ -63,16 +86,33 @@ Copy `custom_components/cyberpower_pdu` into your Home Assistant `config/custom_
 
 ## Configuration
 
-Add via **Settings → Devices & Services → Add Integration → CyberPower PDU**, or
-accept the **discovered** PDU when it appears.
+Go to **Settings → Devices & Services → Add Integration → CyberPower PDU**.
 
-1. **Connection** — host/IP, SNMP port (default `161`), and SNMP version.
-2. **Credentials**
+1. **Pick a PDU** — the integration scans your local network (see *Discovery*)
+   and lists the CyberPower PDUs it finds. Choose one, or choose **Enter IP
+   address manually**.
+2. **Manual entry** (always available) — host/IP, SNMP port (default `161`), and
+   SNMP version.
+3. **Credentials**
    - *v1/v2c*: read community (default `public`) and write community (default `private`).
-   - *v3*: username, and optional authentication/privacy protocols + keys.
+   - *v3*: username, plus optional authentication/privacy protocols and keys.
 
-The integration verifies the device is a CyberPower PDU and identifies it by serial
-number / MAC, so re-discovery won't create duplicates.
+The integration confirms the device is a CyberPower PDU and identifies it by MAC
+(falling back to serial), so the same PDU is never added twice.
+
+### Discovery
+
+Discovery is an **active SNMP scan of your local subnet(s)** — no DHCP required:
+
+1. Home Assistant's network adapters determine the local IPv4 subnet(s).
+2. The host's **ARP/neighbour table is checked first**, so only addresses that
+   are actually alive get probed — no blind spraying. If the ARP cache is cold,
+   it falls back to a bounded SNMP sweep of the subnet.
+3. Each live host gets one short SNMP query; those answering under the CyberPower
+   enterprise OID are offered for setup.
+
+Manual IP entry is always available for PDUs the scan can't reach (static IP on a
+different segment, a non-`public` read community, etc.).
 
 ### Options
 
@@ -105,15 +145,21 @@ the totals only. Energy feeds the Home Assistant **Energy dashboard**.
 
 ## Resilience
 
-- Built on a `DataUpdateCoordinator`: a network outage or PDU reboot marks entities
-  *unavailable* and recovers automatically on the next successful poll.
-- If the PDU is unreachable at startup, setup retries (`ConfigEntryNotReady`) instead
-  of failing permanently.
+- Built on a `DataUpdateCoordinator`: a network outage or PDU reboot marks
+  entities *unavailable* and recovers automatically on the next good poll.
+- **Capped exponential backoff** — after a failed poll the interval doubles
+  (15 → 30 → 60 s) up to a 60 s ceiling, then snaps back to normal on the first
+  success, so a down PDU isn't hammered.
+- **Self-healing IP** — if a PDU stays unreachable at the backoff ceiling, the
+  integration rescans the network for its **MAC** and, if it has moved to a new
+  IP, updates the entry automatically. This replaces DHCP for IP-change recovery.
+- If the PDU is unreachable at startup, setup retries (`ConfigEntryNotReady`).
 
 ## Troubleshooting
 
 - **Outlets show state but won't switch** → the **write community** (v1/v2c) or the
-  v3 user lacks write access. Fix it on the PDU and reconfigure the entry.
+  v3 user lacks write access. Fix it on the PDU, then reload the entry (or remove
+  and re-add the PDU if you changed the community name).
 - **"Could not reach the PDU over SNMP"** → SNMP not enabled, wrong community/version,
   or a firewall blocking UDP/161.
 - **Wrong/odd readings on a different model** → please open an issue with an
@@ -143,6 +189,7 @@ hardware is needed for CI.
 [MIT](LICENSE) © Michael Nemat
 
 [pysnmp]: https://github.com/lextudio/pysnmp
+[issues]: https://github.com/mikenemat/ha-cyberpower-pdu/issues
 [hacs]: https://github.com/hacs/integration
 [hacs-badge]: https://img.shields.io/badge/HACS-Custom-41BDF5.svg
 [pytest-homeassistant-custom-component]: https://github.com/MatthewFlamm/pytest-homeassistant-custom-component
