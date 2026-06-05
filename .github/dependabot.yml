@@ -15,3 +15,7 @@ updates:
       interval: weekly
     commit-message:
       prefix: "deps"
+    ignore:
+      # pysnmp must match the version Home Assistant core ships (manifest pin),
+      # so it is bumped manually in lockstep with HA, not by Dependabot.
+      - dependency-name: "pysnmp"
