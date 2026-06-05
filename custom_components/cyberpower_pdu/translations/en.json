@@ -4,9 +4,17 @@
     "step": {
       "user": {
         "title": "CyberPower PDU",
-        "description": "Select a PDU found on your network, or choose to enter an IP address manually.",
+        "description": "PDUs found on your network are listed below, or add one by IP address.",
+        "menu_options": {
+          "pick": "Add discovered PDUs",
+          "manual": "Enter an IP address manually"
+        }
+      },
+      "pick": {
+        "title": "Add CyberPower PDUs",
+        "description": "Select the PDUs to add. They will share the SNMP credentials you enter next.",
         "data": {
-          "device": "Device"
+          "devices": "PDUs"
         }
       },
       "manual": {
@@ -24,7 +32,7 @@
       },
       "credentials": {
         "title": "SNMP credentials",
-        "description": "Credentials for {host}. For SNMP v1/v2c the defaults (public / private) match a factory PDU; the write community is required to control outlets.",
+        "description": "Credentials applied to the {count} selected PDU(s). For SNMP v1/v2c the defaults (public / private) match a factory PDU; the write community is required to control outlets.",
         "data": {
           "community": "Read community",
           "write_community": "Write community",
@@ -37,9 +45,10 @@
       }
     },
     "error": {
-      "cannot_connect": "Could not reach the PDU over SNMP. Check the address, port, and credentials.",
+      "cannot_connect": "Could not reach any selected PDU over SNMP. Check the address, port, and credentials.",
       "not_cyberpower": "That device responded to SNMP but is not a CyberPower PDU.",
-      "cannot_identify": "The PDU did not report a serial number or MAC address, so it cannot be identified reliably."
+      "cannot_identify": "The PDU did not report a serial number or MAC address, so it cannot be identified reliably.",
+      "no_devices_selected": "Select at least one PDU, or go back to enter an IP manually."
     },
     "abort": {
       "already_configured": "This PDU is already configured."

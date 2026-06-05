@@ -96,12 +96,13 @@ Copy `custom_components/cyberpower_pdu` into your Home Assistant `config/custom_
 
 Go to **Settings → Devices & Services → Add Integration → CyberPower PDU**.
 
-1. **Pick a PDU** — the integration scans your local network (see *Discovery*)
-   and lists the CyberPower PDUs it finds. Choose one, or choose **Enter IP
-   address manually**.
+1. **Pick PDUs** — the scan (see *Discovery*) lists every CyberPower PDU it
+   finds; tick the ones to add (all selected by default) and they're configured
+   together in one go. Already-added PDUs are filtered out. Or choose **Enter an
+   IP address manually**.
 2. **Manual entry** (always available) — host/IP, SNMP port (default `161`), and
-   SNMP version.
-3. **Credentials**
+   SNMP version, for a single PDU.
+3. **Credentials** — entered once and applied to every selected PDU:
    - *v1/v2c*: read community (default `public`) and write community (default `private`).
    - *v3*: username, plus optional authentication/privacy protocols and keys.
 

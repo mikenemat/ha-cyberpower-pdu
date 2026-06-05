@@ -59,10 +59,10 @@ SNMP_RETRIES: Final = 1
 # --- Active network discovery -----------------------------------------------
 # CyberPower Systems OUI; used to recognise the device's MAC during discovery.
 CYBERPOWER_OUI: Final = "00:0c:15"
-# Short, no-retry probe so a full subnet sweep stays fast.
-DISCOVERY_TIMEOUT: Final = 1.0
-DISCOVERY_RETRIES: Final = 0
-DISCOVERY_CONCURRENCY: Final = 50
+# SNMP is lossy UDP; a retry makes a subnet sweep reliable without being slow.
+DISCOVERY_TIMEOUT: Final = 2.0
+DISCOVERY_RETRIES: Final = 1
+DISCOVERY_CONCURRENCY: Final = 30
 # Never sweep networks larger than this many addresses (avoids scanning a /16).
 MAX_DISCOVERY_HOSTS: Final = 1024
 

@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 from homeassistant.config_entries import (
+    SOURCE_IMPORT,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
 )
 from homeassistant.core import callback
+from homeassistant.helpers import config_validation as cv
 import voluptuous as vol
 
 from .const import (
@@ -51,9 +54,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # CyberPower Systems enterprise number; sysObjectID must live under it.
 _CYBERPOWER_ENTERPRISE = "3808"
-# Sentinel option for "I'll type an IP myself" in the discovery picker.
-CONF_DEVICE = "device"
-MANUAL = "__manual__"
+CONF_DEVICES = "devices"
 
 
 class CannotConnect(Exception):
@@ -93,6 +94,13 @@ async def _validate(
     }
 
 
+def _title(info: dict[str, Any]) -> str:
+    """Entry title from model (+ serial when available)."""
+    if info["serial"]:
+        return f"{info['model']} ({info['serial']})"
+    return info["model"]
+
+
 class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for CyberPower PDU."""
 
@@ -100,7 +108,8 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         """Initialize the flow."""
-        self._data: dict[str, Any] = {}
+        self._conn: dict[str, Any] = {}  # shared port + version
+        self._hosts: list[str] = []  # hosts to configure with the next creds
         self._discovered: dict[str, DiscoveredPdu] = {}
 
     @staticmethod
@@ -121,17 +130,7 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Scan the network and let the user pick a PDU (or go manual)."""
-        if user_input is not None:
-            choice = user_input[CONF_DEVICE]
-            if choice == MANUAL:
-                return await self.async_step_manual()
-            pdu = self._discovered[choice]
-            self._data[CONF_HOST] = pdu.host
-            self._data[CONF_PORT] = DEFAULT_PORT
-            self._data[CONF_VERSION] = DEFAULT_VERSION
-            return await self.async_step_credentials()
-
+        """Scan the network, then offer the discovered PDUs or manual entry."""
         try:
             discovered = await async_discover_pdus(self.hass)
         except Exception:  # discovery is best-effort; fall back to manual
@@ -143,27 +142,47 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
         }
         if not self._discovered:
             return await self.async_step_manual()
+        return self.async_show_menu(step_id="user", menu_options=["pick", "manual"])
+
+    async def async_step_pick(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Select one or more discovered PDUs to add at once."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            self._hosts = user_input[CONF_DEVICES]
+            if self._hosts:
+                self._conn = {CONF_PORT: DEFAULT_PORT, CONF_VERSION: DEFAULT_VERSION}
+                return await self.async_step_credentials()
+            errors["base"] = "no_devices_selected"
 
         options = {
             host: f"{pdu.model} ({host})" for host, pdu in self._discovered.items()
         }
-        options[MANUAL] = "Enter IP address manually"
-        return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema({vol.Required(CONF_DEVICE): vol.In(options)}),
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_DEVICES, default=list(options)): cv.multi_select(
+                    options
+                )
+            }
         )
+        return self.async_show_form(step_id="pick", data_schema=schema, errors=errors)
 
     async def async_step_manual(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Collect connection details by hand (the always-available fallback)."""
+        """Collect a single PDU by hand (the always-available fallback)."""
         if user_input is not None:
-            self._data.update(user_input)
+            self._hosts = [user_input[CONF_HOST]]
+            self._conn = {
+                CONF_PORT: user_input[CONF_PORT],
+                CONF_VERSION: user_input[CONF_VERSION],
+            }
             return await self.async_step_credentials()
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_HOST, default=self._data.get(CONF_HOST, "")): str,
+                vol.Required(CONF_HOST): str,
                 vol.Required(CONF_PORT, default=DEFAULT_PORT): vol.All(
                     vol.Coerce(int), vol.Range(min=1, max=65535)
                 ),
@@ -177,47 +196,93 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_credentials(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Collect SNMP credentials and validate the connection."""
+        """Collect shared SNMP credentials and create an entry per reachable PDU."""
         errors: dict[str, str] = {}
-        version = self._data[CONF_VERSION]
+        version = self._conn[CONF_VERSION]
 
         if user_input is not None:
-            data = {**self._data, **user_input}
             credentials = SnmpCredentials(
                 version=version,
-                community=data.get(CONF_COMMUNITY, DEFAULT_COMMUNITY),
-                write_community=data.get(CONF_WRITE_COMMUNITY, DEFAULT_WRITE_COMMUNITY),
-                username=data.get(CONF_USERNAME, ""),
-                auth_protocol=data.get(CONF_AUTH_PROTOCOL, AUTH_NONE),
-                auth_key=data.get(CONF_AUTH_KEY, ""),
-                priv_protocol=data.get(CONF_PRIV_PROTOCOL, PRIV_NONE),
-                priv_key=data.get(CONF_PRIV_KEY, ""),
+                community=user_input.get(CONF_COMMUNITY, DEFAULT_COMMUNITY),
+                write_community=user_input.get(
+                    CONF_WRITE_COMMUNITY, DEFAULT_WRITE_COMMUNITY
+                ),
+                username=user_input.get(CONF_USERNAME, ""),
+                auth_protocol=user_input.get(CONF_AUTH_PROTOCOL, AUTH_NONE),
+                auth_key=user_input.get(CONF_AUTH_KEY, ""),
+                priv_protocol=user_input.get(CONF_PRIV_PROTOCOL, PRIV_NONE),
+                priv_key=user_input.get(CONF_PRIV_KEY, ""),
             )
-            try:
-                info = await _validate(data[CONF_HOST], data[CONF_PORT], credentials)
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except NotCyberPower:
-                errors["base"] = "not_cyberpower"
-            else:
-                unique_id = device_unique_id(info["serial"], info["mac"])
-                if unique_id is None:
-                    errors["base"] = "cannot_identify"
-                else:
-                    await self.async_set_unique_id(unique_id, raise_on_progress=False)
-                    self._abort_if_unique_id_configured(
-                        updates={CONF_HOST: data[CONF_HOST]}
-                    )
-                    title = info["model"]
-                    if info["serial"]:
-                        title = f"{info['model']} ({info['serial']})"
-                    return self.async_create_entry(title=title, data=data)
+            entry_common = {**self._conn, **user_input}
+            result = await self._async_create_for_hosts(credentials, entry_common)
+            if result is not None:
+                return result
+            errors["base"] = "cannot_connect"
 
         return self.async_show_form(
             step_id="credentials",
             data_schema=self._credentials_schema(version),
             errors=errors,
-            description_placeholders={"host": self._data.get(CONF_HOST, "")},
+            description_placeholders={"count": str(len(self._hosts))},
+        )
+
+    async def _async_create_for_hosts(
+        self, credentials: SnmpCredentials, entry_common: dict[str, Any]
+    ) -> ConfigFlowResult | None:
+        """Validate every host, then create one entry each. None => all failed."""
+        port = self._conn[CONF_PORT]
+        infos = await asyncio.gather(
+            *(self._validate_or_none(host, port, credentials) for host in self._hosts)
+        )
+        valid = [
+            (host, info, device_unique_id(info["serial"], info["mac"]))
+            for host, info in zip(self._hosts, infos, strict=True)
+            if info is not None
+        ]
+        valid = [(h, info, uid) for (h, info, uid) in valid if uid is not None]
+        if not valid:
+            return None
+
+        # Fan out the extra PDUs as headless import flows (one entry each).
+        for host, info, uid in valid[1:]:
+            self.hass.async_create_task(
+                self.hass.config_entries.flow.async_init(
+                    DOMAIN,
+                    context={"source": SOURCE_IMPORT},
+                    data={
+                        "unique_id": uid,
+                        "title": _title(info),
+                        "data": {CONF_HOST: host, **entry_common},
+                    },
+                )
+            )
+
+        host0, info0, uid0 = valid[0]
+        await self.async_set_unique_id(uid0, raise_on_progress=False)
+        self._abort_if_unique_id_configured(updates={CONF_HOST: host0})
+        return self.async_create_entry(
+            title=_title(info0), data={CONF_HOST: host0, **entry_common}
+        )
+
+    async def _validate_or_none(
+        self, host: str, port: int, credentials: SnmpCredentials
+    ) -> dict[str, Any] | None:
+        try:
+            return await _validate(host, port, credentials)
+        except (CannotConnect, NotCyberPower):
+            _LOGGER.debug("Validation failed for %s", host, exc_info=True)
+            return None
+
+    async def async_step_import(self, import_data: dict[str, Any]) -> ConfigFlowResult:
+        """Headless entry creation for additional bulk-added PDUs."""
+        await self.async_set_unique_id(
+            import_data["unique_id"], raise_on_progress=False
+        )
+        self._abort_if_unique_id_configured(
+            updates={CONF_HOST: import_data["data"][CONF_HOST]}
+        )
+        return self.async_create_entry(
+            title=import_data["title"], data=import_data["data"]
         )
 
     @staticmethod
