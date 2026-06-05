@@ -222,7 +222,12 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
         """Collect one or more PDUs by hand (the always-available fallback)."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            hosts = _parse_hosts(user_input[CONF_HOST])
+            # The host field is a multi-value selector (one IP per row); still
+            # tolerate someone pasting a separated list into a single row.
+            hosts: list[str] = []
+            for item in user_input.get(CONF_HOST) or []:
+                hosts.extend(_parse_hosts(item))
+            hosts = list(dict.fromkeys(hosts))
             if hosts:
                 self._hosts = hosts
                 self._conn = {
@@ -235,7 +240,7 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
         schema = vol.Schema(
             {
                 vol.Required(CONF_HOST): TextSelector(
-                    TextSelectorConfig(multiline=True)
+                    TextSelectorConfig(multiple=True)
                 ),
                 vol.Required(CONF_PORT, default=DEFAULT_PORT): vol.All(
                     vol.Coerce(int), vol.Range(min=1, max=65535)

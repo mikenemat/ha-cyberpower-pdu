@@ -132,6 +132,16 @@ shown behind a **progress bar** so you can see it working:
    run on a pool of SNMP engines, so a cold full sweep is quick (~10 s for a
    `/24`, ~30 s for a `/22`).
 
+> **⚠️ Running Home Assistant in Docker?** Discovery scans the network of the
+> **container's own** interface. With the default **bridge** network that's the
+> Docker subnet (e.g. `172.x`), *not* your LAN, so the scan won't find PDUs and
+> (because that subnet is large) the wizard drops straight to manual entry with
+> no progress bar. To make discovery see your LAN, run the container with
+> `network_mode: host` or a **macvlan** network. Otherwise just use **manual
+> entry** — unicast SNMP to a LAN IP still routes out of a bridged container, so
+> manually-added PDUs work normally. The same applies to HA in an LXC/VM that
+> isn't bridged onto your LAN.
+
 Manual IP entry is always available for PDUs the scan can't reach (static IP on a
 different segment, a non-`public` read community, etc.).
 
@@ -182,6 +192,11 @@ the totals only. Energy feeds the Home Assistant **Energy dashboard**.
 
 ## Troubleshooting
 
+- **Auto-discovery finds nothing (no progress bar, no devices)** → almost always
+  Home Assistant is in a **Docker container on the default bridge network**, so it
+  only sees the Docker subnet, not your LAN. Run HA with `network_mode: host` or a
+  macvlan for discovery to work, **or** just add PDUs via **Enter an IP address
+  manually** — that works regardless of container networking.
 - **Outlets show state but won't switch** → the **write community** (v1/v2c) or the
   v3 user lacks write access. Fix it on the PDU, then reload the entry (or remove
   and re-add the PDU if you changed the community name).

@@ -22,14 +22,14 @@
       },
       "manual": {
         "title": "Add CyberPower PDUs",
-        "description": "Enter one or more PDU IP addresses — one per line, or separated by spaces/commas. They share the port, SNMP version, and credentials you enter.",
+        "description": "Add one or more PDUs by IP address or hostname — use the add button to add a row for each. They share the port, SNMP version, and credentials you enter.",
         "data": {
-          "host": "IP address(es)",
+          "host": "IP addresses or hostnames",
           "port": "SNMP port",
           "snmp_version": "SNMP version"
         },
         "data_description": {
-          "host": "One PDU per line, or comma/space separated.",
+          "host": "Add one row per PDU.",
           "snmp_version": "v1 is the simplest. Use v3 if you have configured a USM user."
         }
       },
@@ -52,7 +52,7 @@
       "not_cyberpower": "That device responded to SNMP but is not a CyberPower PDU.",
       "cannot_identify": "The PDU did not report a serial number or MAC address, so it cannot be identified reliably.",
       "no_devices_selected": "Select at least one PDU, or go back to enter an IP manually.",
-      "no_hosts": "Enter at least one IP address."
+      "no_hosts": "Add at least one IP address or hostname."
     },
     "abort": {
       "already_configured": "This PDU is already configured."

@@ -21,7 +21,7 @@ _DISCOVERED = [
     DiscoveredPdu(H3, "00:0c:15:00:00:03", "PDU41002", "SNCCC"),
 ]
 _CREDS = {c.CONF_COMMUNITY: "public", c.CONF_WRITE_COMMUNITY: "private"}
-_MANUAL_CONN = {c.CONF_HOST: H1, c.CONF_PORT: 161, c.CONF_VERSION: c.VERSION_V1}
+_MANUAL_CONN = {c.CONF_HOST: [H1], c.CONF_PORT: 161, c.CONF_VERSION: c.VERSION_V1}
 
 
 def _register_three(fake_snmp: FakeSnmp) -> None:
@@ -138,7 +138,8 @@ async def test_manual_multiple_ips(hass: HomeAssistant, fake_snmp: FakeSnmp) -> 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {
-            c.CONF_HOST: f"{H1}\n{H2}, {H3}",
+            # multi-value rows; one row also pasted as a separated list
+            c.CONF_HOST: [H1, f"{H2}, {H3}"],
             c.CONF_PORT: 161,
             c.CONF_VERSION: c.VERSION_V1,
         },
