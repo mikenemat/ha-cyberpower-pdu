@@ -112,6 +112,7 @@ class CyberPowerSnmp:
         *,
         timeout: float = SNMP_TIMEOUT,
         retries: int = SNMP_RETRIES,
+        engine: SnmpEngine | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -120,7 +121,11 @@ class CyberPowerSnmp:
         self._write_auth = credentials._write_auth()
         self._timeout = timeout
         self._retries = retries
-        self._engine: SnmpEngine | None = None
+        # A shared engine may be passed in (e.g. a discovery sweep) to avoid the
+        # significant CPU cost of building one SnmpEngine per host; we then don't
+        # own it and must not close it.
+        self._engine: SnmpEngine | None = engine
+        self._owns_engine = engine is None
         self._target: UdpTransportTarget | None = None
         # The device answers one request at a time; serialize to avoid
         # interleaving a control SET with a coordinator poll on one engine.
@@ -129,6 +134,7 @@ class CyberPowerSnmp:
     async def _ensure(self) -> tuple[SnmpEngine, UdpTransportTarget]:
         if self._engine is None:
             self._engine = SnmpEngine()
+            self._owns_engine = True
         if self._target is None:
             self._target = await UdpTransportTarget.create(
                 (self._host, self._port),
@@ -207,14 +213,14 @@ class CyberPowerSnmp:
                 raise SnmpError(f"SNMP SET error: {err_stat.prettyPrint()}")
 
     def close(self) -> None:
-        """Tear down the SNMP engine/dispatcher."""
-        if self._engine is not None:
+        """Tear down the SNMP engine/dispatcher (only if we own it)."""
+        if self._engine is not None and self._owns_engine:
             try:
                 self._engine.close_dispatcher()
             except Exception:  # best-effort cleanup
                 _LOGGER.debug("Error closing SNMP dispatcher", exc_info=True)
             self._engine = None
-            self._target = None
+        self._target = None
 
 
 # --- value coercion helpers --------------------------------------------------

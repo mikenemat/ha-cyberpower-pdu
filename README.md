@@ -113,14 +113,16 @@ serial, so reloads never re-derive (and never drop) your existing entities.
 
 ### Discovery
 
-Discovery is an **active SNMP scan of your local subnet(s)** — no DHCP required:
+Discovery is an **active SNMP scan of your local subnet(s)** — no DHCP required —
+shown behind a **progress bar** so you can see it working:
 
 1. Home Assistant's network adapters determine the local IPv4 subnet(s).
 2. The host's **ARP/neighbour table is checked first**, so only addresses that
    are actually alive get probed — no blind spraying. If the ARP cache is cold,
-   it falls back to a bounded SNMP sweep of the subnet.
-3. Each live host gets one short SNMP query; those answering under the CyberPower
-   enterprise OID are offered for setup.
+   it falls back to a full SNMP sweep of the subnet.
+3. Each candidate gets one short SNMP query; those answering under the CyberPower
+   enterprise OID are offered for setup. Probes run on a pooled set of SNMP
+   engines, so even a cold-cache full `/24` sweep finishes in ~10 seconds.
 
 Manual IP entry is always available for PDUs the scan can't reach (static IP on a
 different segment, a non-`public` read community, etc.).

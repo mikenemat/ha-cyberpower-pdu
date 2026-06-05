@@ -31,13 +31,21 @@ def _register_three(fake_snmp: FakeSnmp) -> None:
 
 
 async def _start(hass: HomeAssistant, discovered: list[DiscoveredPdu]):
+    """Start the flow and drive through the discovery progress step."""
     with patch(
         "custom_components.cyberpower_pdu.config_flow.async_discover_pdus",
         new=AsyncMock(return_value=discovered),
     ):
-        return await hass.config_entries.flow.async_init(
+        result = await hass.config_entries.flow.async_init(
             c.DOMAIN, context={"source": SOURCE_USER}
         )
+        while result["type"] in (
+            FlowResultType.SHOW_PROGRESS,
+            FlowResultType.SHOW_PROGRESS_DONE,
+        ):
+            await hass.async_block_till_done()
+            result = await hass.config_entries.flow.async_configure(result["flow_id"])
+        return result
 
 
 async def test_bulk_add_all_discovered(

@@ -111,6 +111,8 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
         self._conn: dict[str, Any] = {}  # shared port + version
         self._hosts: list[str] = []  # hosts to configure with the next creds
         self._discovered: dict[str, DiscoveredPdu] = {}
+        self._discovery_task: asyncio.Task[list[DiscoveredPdu]] | None = None
+        self._last_progress = 0.0
 
     @staticmethod
     @callback
@@ -130,19 +132,50 @@ class CyberPowerConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Scan the network, then offer the discovered PDUs or manual entry."""
+        """Scan the network behind a progress bar, then offer the results."""
+        if self._discovery_task is None:
+            self._discovery_task = self.hass.async_create_task(self._async_discover())
+        if not self._discovery_task.done():
+            return self.async_show_progress(
+                step_id="user",
+                progress_action="discovering",
+                progress_task=self._discovery_task,
+            )
+
         try:
-            discovered = await async_discover_pdus(self.hass)
+            discovered = self._discovery_task.result()
         except Exception:  # discovery is best-effort; fall back to manual
             _LOGGER.debug("Network discovery failed", exc_info=True)
             discovered = []
+        finally:
+            self._discovery_task = None
 
         self._discovered = {
             pdu.host: pdu for pdu in discovered if not self._already_configured(pdu)
         }
-        if not self._discovered:
-            return await self.async_step_manual()
-        return self.async_show_menu(step_id="user", menu_options=["pick", "manual"])
+        next_step = "discovered" if self._discovered else "manual"
+        return self.async_show_progress_done(next_step_id=next_step)
+
+    async def _async_discover(self) -> list[DiscoveredPdu]:
+        """Run the scan, pushing throttled progress to the bar."""
+
+        def _progress(done: int, total: int) -> None:
+            if not total:
+                return
+            fraction = done / total
+            if fraction - self._last_progress >= 0.02 or done == total:
+                self._last_progress = fraction
+                self.async_update_progress(fraction)
+
+        return await async_discover_pdus(self.hass, progress_cb=_progress)
+
+    async def async_step_discovered(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Offer the discovered PDUs (bulk) or manual entry."""
+        return self.async_show_menu(
+            step_id="discovered", menu_options=["pick", "manual"]
+        )
 
     async def async_step_pick(
         self, user_input: dict[str, Any] | None = None

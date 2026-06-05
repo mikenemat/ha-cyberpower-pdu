@@ -10,17 +10,20 @@ raw sockets, no privileges, no DHCP.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 import ipaddress
 import logging
 
 from homeassistant.components import network
 from homeassistant.core import HomeAssistant
+from pysnmp.hlapi.v3arch.asyncio import SnmpEngine
 
 from .const import (
     DEFAULT_COMMUNITY,
     DEFAULT_PORT,
-    DISCOVERY_CONCURRENCY,
+    DISCOVERY_PER_ENGINE,
+    DISCOVERY_POOL_SIZE,
     DISCOVERY_RETRIES,
     DISCOVERY_TIMEOUT,
     ENTERPRISE,
@@ -87,7 +90,9 @@ async def _local_networks(hass: HomeAssistant) -> list[ipaddress.IPv4Network]:
     return networks
 
 
-async def _probe_host(host: str, community: str) -> DiscoveredPdu | None:
+async def _probe_host(
+    host: str, community: str, engine: SnmpEngine | None = None
+) -> DiscoveredPdu | None:
     """SNMP-probe one host; return a DiscoveredPdu if it is a CyberPower PDU."""
     snmp = CyberPowerSnmp(
         host,
@@ -95,6 +100,7 @@ async def _probe_host(host: str, community: str) -> DiscoveredPdu | None:
         SnmpCredentials(version=VERSION_V1, community=community),
         timeout=DISCOVERY_TIMEOUT,
         retries=DISCOVERY_RETRIES,
+        engine=engine,
     )
     try:
         result = await snmp.get(
@@ -121,9 +127,15 @@ async def _probe_host(host: str, community: str) -> DiscoveredPdu | None:
 
 
 async def async_discover_pdus(
-    hass: HomeAssistant, community: str = DEFAULT_COMMUNITY
+    hass: HomeAssistant,
+    community: str = DEFAULT_COMMUNITY,
+    progress_cb: Callable[[int, int], None] | None = None,
 ) -> list[DiscoveredPdu]:
-    """Discover CyberPower PDUs on the local network(s)."""
+    """Discover CyberPower PDUs on the local network(s).
+
+    ``progress_cb(done, total)`` is invoked as each candidate host is probed, so
+    callers (the config flow) can drive a progress bar.
+    """
     networks = await _local_networks(hass)
     if not networks:
         return []
@@ -138,17 +150,36 @@ async def async_discover_pdus(
         for net in networks:
             candidates.update(str(host) for host in net.hosts())
 
-    semaphore = asyncio.Semaphore(DISCOVERY_CONCURRENCY)
+    hosts = list(candidates)
+    total = len(hosts)
+    done = 0
+    # A pool of shared engines, each capped to a few concurrent probes.
+    pool_size = min(DISCOVERY_POOL_SIZE, total) or 1
+    engines = [SnmpEngine() for _ in range(pool_size)]
+    sems = [asyncio.Semaphore(DISCOVERY_PER_ENGINE) for _ in range(pool_size)]
 
-    async def _bounded(host: str) -> DiscoveredPdu | None:
-        async with semaphore:
-            return await _probe_host(host, community)
+    async def _bounded(index: int, host: str) -> DiscoveredPdu | None:
+        nonlocal done
+        slot = index % pool_size
+        async with sems[slot]:
+            result = await _probe_host(host, community, engines[slot])
+        done += 1
+        if progress_cb is not None:
+            progress_cb(done, total)
+        return result
 
-    found = [
-        pdu
-        for pdu in await asyncio.gather(*(_bounded(ip) for ip in candidates))
-        if pdu is not None
-    ]
+    try:
+        found = [
+            pdu
+            for pdu in await asyncio.gather(
+                *(_bounded(i, host) for i, host in enumerate(hosts))
+            )
+            if pdu is not None
+        ]
+    finally:
+        for engine in engines:
+            engine.close_dispatcher()
+
     # Backfill MAC from ARP when SNMP did not provide one.
     for pdu in found:
         if not pdu.mac and pdu.host in arp:

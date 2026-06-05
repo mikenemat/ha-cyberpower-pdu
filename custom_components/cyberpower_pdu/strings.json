@@ -1,8 +1,11 @@
 {
   "config": {
     "flow_title": "{name}",
+    "progress": {
+      "discovering": "Searching your network for CyberPower PDUs…"
+    },
     "step": {
-      "user": {
+      "discovered": {
         "title": "CyberPower PDU",
         "description": "PDUs found on your network are listed below, or add one by IP address.",
         "menu_options": {
