@@ -9,6 +9,6 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/mikenemat/ha-cyberpower-pdu/issues",
   "loggers": ["pysnmp"],
-  "requirements": ["pysnmp==7.1.22"],
-  "version": "0.2.0"
+  "requirements": ["pysnmp>=7.1.21,<8"],
+  "version": "0.2.1"
 }

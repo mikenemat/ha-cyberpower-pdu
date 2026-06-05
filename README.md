@@ -23,9 +23,17 @@ The PDU offers telnet, an HTTP web UI, and SNMP. This integration uses **SNMP**:
   of the web/telnet console. The web UI and CLI share a *single* management
   session — an integration that held one would break your console access.
 - It is **fast** and reads everything needed in one batched poll.
-- It runs on **pure-Python [`pysnmp`]** — the exact library and version Home
-  Assistant core already ships (`pysnmp==7.1.22`). No `snmpwalk`, no compiled
-  binaries, no static-binary hacks on HAOS.
+- It runs on the same **pure-Python [`pysnmp`]** library Home Assistant core
+  already ships (the `pysnmp` 7.x line). No `snmpwalk`, no compiled binaries, no
+  static-binary hacks on HAOS.
+
+## Requirements
+
+- **Home Assistant 2025.8 or newer.** That release is when HA core moved to
+  `pysnmp` 7.x, whose API this integration uses; the requirement is declared as
+  `pysnmp>=7.1.21,<8` so it stays satisfied by whatever 7.x your HA ships (no
+  version conflict, no forced reinstall). HACS enforces the minimum.
+- SNMP enabled on the PDU — see [below](#before-you-start-enable-snmp-on-the-pdu).
 
 ## Supported devices
 
