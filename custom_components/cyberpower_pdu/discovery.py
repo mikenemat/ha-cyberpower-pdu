@@ -26,7 +26,7 @@ from .const import (
     DISCOVERY_POOL_SIZE,
     DISCOVERY_RETRIES,
     DISCOVERY_TIMEOUT,
-    ENTERPRISE,
+    EPDU,
     MAX_DISCOVERY_HOSTS,
     OID_IDENT_MODEL,
     OID_IDENT_SERIAL,
@@ -90,10 +90,19 @@ async def _local_networks(hass: HomeAssistant) -> list[ipaddress.IPv4Network]:
     return networks
 
 
+def is_epdu(sys_object_id: str) -> bool:
+    """True only for CyberPower ePDU PDUs (subtree …3808.1.1.3).
+
+    Other CyberPower gear (UPS = …3808.1.1.1, ATS, etc.) shares the 3808
+    enterprise but a different subtree and must be rejected.
+    """
+    return sys_object_id == EPDU or sys_object_id.startswith(f"{EPDU}.")
+
+
 async def _probe_host(
     host: str, community: str, engine: SnmpEngine | None = None
 ) -> DiscoveredPdu | None:
-    """SNMP-probe one host; return a DiscoveredPdu if it is a CyberPower PDU."""
+    """SNMP-probe one host; return a DiscoveredPdu only if it is a PDU."""
     snmp = CyberPowerSnmp(
         host,
         DEFAULT_PORT,
@@ -103,26 +112,24 @@ async def _probe_host(
         engine=engine,
     )
     try:
-        result = await snmp.get(
-            [
-                OID_SYS_OBJECT_ID,
-                OID_IDENT_MODEL,
-                OID_IDENT_SERIAL,
-                OID_IF_PHYS_ADDRESS,
-            ]
+        # sysObjectID alone first: a v1 multi-OID GET fails wholesale when an OID
+        # is absent, and identifies the device type before fetching PDU details.
+        head = await snmp.get([OID_SYS_OBJECT_ID])
+        if not is_epdu(as_str(head.get(OID_SYS_OBJECT_ID)) or ""):
+            return None
+        details = await snmp.get(
+            [OID_IDENT_MODEL, OID_IDENT_SERIAL, OID_IF_PHYS_ADDRESS]
         )
     except SnmpError:
         return None
     finally:
         snmp.close()
 
-    if ENTERPRISE not in (as_str(result.get(OID_SYS_OBJECT_ID)) or ""):
-        return None
     return DiscoveredPdu(
         host=host,
-        mac=as_mac(result.get(OID_IF_PHYS_ADDRESS)),
-        model=as_str(result.get(OID_IDENT_MODEL)) or "PDU",
-        serial=as_str(result.get(OID_IDENT_SERIAL)) or "",
+        mac=as_mac(details.get(OID_IF_PHYS_ADDRESS)),
+        model=as_str(details.get(OID_IDENT_MODEL)) or "PDU",
+        serial=as_str(details.get(OID_IDENT_SERIAL)) or "",
     )
 
 

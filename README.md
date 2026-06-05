@@ -116,13 +116,18 @@ serial, so reloads never re-derive (and never drop) your existing entities.
 Discovery is an **active SNMP scan of your local subnet(s)** — no DHCP required —
 shown behind a **progress bar** so you can see it working:
 
-1. Home Assistant's network adapters determine the local IPv4 subnet(s).
+1. Home Assistant's network adapters determine the local IPv4 subnet(s). The
+   adapter's **actual prefix** is used — a `/24`, `/23`, `/22`, … are each swept
+   at their real size (nothing is hardcoded); networks larger than ~a `/21` are
+   skipped to avoid scanning a huge range.
 2. The host's **ARP/neighbour table is checked first**, so only addresses that
    are actually alive get probed — no blind spraying. If the ARP cache is cold,
    it falls back to a full SNMP sweep of the subnet.
-3. Each candidate gets one short SNMP query; those answering under the CyberPower
-   enterprise OID are offered for setup. Probes run on a pooled set of SNMP
-   engines, so even a cold-cache full `/24` sweep finishes in ~10 seconds.
+3. Each candidate gets a short SNMP query; only devices whose sysObjectID is the
+   CyberPower **ePDU** subtree (`…3808.1.1.3`) are offered — a CyberPower **UPS**
+   (`…3808.1.1.1`), ATS, or other gear on the same enterprise is ignored. Probes
+   run on a pool of SNMP engines, so a cold full sweep is quick (~10 s for a
+   `/24`, ~30 s for a `/22`).
 
 Manual IP entry is always available for PDUs the scan can't reach (static IP on a
 different segment, a non-`public` read community, etc.).

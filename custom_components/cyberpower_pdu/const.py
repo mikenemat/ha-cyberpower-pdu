@@ -68,8 +68,10 @@ DISCOVERY_TIMEOUT: Final = 1.0
 DISCOVERY_RETRIES: Final = 1
 DISCOVERY_POOL_SIZE: Final = 24
 DISCOVERY_PER_ENGINE: Final = 4
-# Never sweep networks larger than this many addresses (avoids scanning a /16).
-MAX_DISCOVERY_HOSTS: Final = 1024
+# Never sweep networks larger than this many addresses (covers up to a /21;
+# avoids accidentally scanning a huge /16). The adapter's real prefix is used —
+# a /24, /23, /22, … are all swept at their actual size, nothing is hardcoded.
+MAX_DISCOVERY_HOSTS: Final = 2048
 
 # --- OID building blocks -----------------------------------------------------
 ENTERPRISE: Final = "1.3.6.1.4.1.3808"

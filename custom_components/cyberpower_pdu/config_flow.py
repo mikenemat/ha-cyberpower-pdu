@@ -47,13 +47,11 @@ from .const import (
     VERSION_V3,
 )
 from .coordinator import CyberPowerConfigEntry, device_unique_id
-from .discovery import DiscoveredPdu, async_discover_pdus
+from .discovery import DiscoveredPdu, async_discover_pdus, is_epdu
 from .snmp import CyberPowerSnmp, SnmpCredentials, SnmpError, as_mac, as_str
 
 _LOGGER = logging.getLogger(__name__)
 
-# CyberPower Systems enterprise number; sysObjectID must live under it.
-_CYBERPOWER_ENTERPRISE = "3808"
 CONF_DEVICES = "devices"
 
 
@@ -71,26 +69,21 @@ async def _validate(
     """Probe the device and return its identifying details."""
     snmp = CyberPowerSnmp(host, port, credentials)
     try:
-        result = await snmp.get(
-            [
-                OID_SYS_OBJECT_ID,
-                OID_IDENT_MODEL,
-                OID_IDENT_SERIAL,
-                OID_IF_PHYS_ADDRESS,
-            ]
+        head = await snmp.get([OID_SYS_OBJECT_ID])
+        if not is_epdu(as_str(head.get(OID_SYS_OBJECT_ID)) or ""):
+            raise NotCyberPower
+        details = await snmp.get(
+            [OID_IDENT_MODEL, OID_IDENT_SERIAL, OID_IF_PHYS_ADDRESS]
         )
     except SnmpError as err:
         raise CannotConnect from err
     finally:
         snmp.close()
 
-    sys_object_id = as_str(result.get(OID_SYS_OBJECT_ID)) or ""
-    if _CYBERPOWER_ENTERPRISE not in sys_object_id:
-        raise NotCyberPower
     return {
-        "model": as_str(result.get(OID_IDENT_MODEL)) or "PDU",
-        "serial": as_str(result.get(OID_IDENT_SERIAL)) or "",
-        "mac": as_mac(result.get(OID_IF_PHYS_ADDRESS)),
+        "model": as_str(details.get(OID_IDENT_MODEL)) or "PDU",
+        "serial": as_str(details.get(OID_IDENT_SERIAL)) or "",
+        "mac": as_mac(details.get(OID_IF_PHYS_ADDRESS)),
     }
 
 

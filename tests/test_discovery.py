@@ -101,6 +101,22 @@ async def test_find_host_for_mac(hass: HomeAssistant) -> None:
         assert await d.async_find_host_for_mac(hass, "00:00:00:00:00:00") is None
 
 
+async def test_probe_rejects_cyberpower_non_pdu() -> None:
+    """A CyberPower UPS (…3808.1.1.1) is rejected — only PDUs (…3808.1.1.3)."""
+    ups = FakeSnmp(sys_object_id="1.3.6.1.4.1.3808.1.1.1")
+    with patch.object(d, "CyberPowerSnmp", return_value=ups):
+        assert await d._probe_host("192.0.2.7", "public") is None
+
+
+async def test_probe_accepts_pdu() -> None:
+    """An ePDU sysObjectID (…3808.1.1.3) is accepted and identified."""
+    pdu = FakeSnmp(serial="SNX", mac=b"\x00\x0c\x15\x00\x00\x07")
+    with patch.object(d, "CyberPowerSnmp", return_value=pdu):
+        result = await d._probe_host("192.0.2.7", "public")
+    assert result is not None
+    assert result.serial == "SNX"
+
+
 # --- multi-PDU and dynamic topology ----------------------------------------
 
 
