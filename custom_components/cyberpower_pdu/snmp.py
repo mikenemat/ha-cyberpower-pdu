@@ -30,6 +30,7 @@ from pysnmp.hlapi.v3arch.asyncio import (
     usmNoPrivProtocol,
     walk_cmd,
 )
+from pysnmp.hlapi.varbinds import CommandGeneratorVarBinds
 from pysnmp.proto import rfc1905
 
 from .const import (
@@ -58,6 +59,52 @@ _PRIV_PROTOCOLS = {
 
 # Sentinels returned by SNMP for absent rows/columns.
 _ABSENT = (rfc1905.NoSuchObject, rfc1905.NoSuchInstance, rfc1905.EndOfMibView)
+
+
+def _warm_engine(engine: SnmpEngine) -> None:
+    """Pre-load the MIB modules pysnmp would otherwise read from disk lazily.
+
+    pysnmp loads its MIB ``.py`` files via ``os.listdir``/``open`` the first time
+    it resolves an OID (request path) or processes a response (dispatch path).
+    Inside the asyncio loop Home Assistant flags that file I/O as a blocking call
+    (a stability problem). Each engine has **two** independent ``MibBuilder``s —
+    the message dispatcher's and the hlapi ``MibViewController``'s — so warm both
+    here, once, so later in-loop ``import_symbols`` calls are pure dict hits.
+
+    MUST run off the event loop: it performs the file I/O itself. Best-effort —
+    if pysnmp's internals move, warm-up is skipped and behaviour degrades to the
+    (pre-fix) lazy load, never an exception.
+    """
+    try:
+        builder = engine.message_dispatcher.mib_instrum_controller.get_mib_builder()
+        builder.load_modules()
+    except Exception:
+        _LOGGER.debug("SNMP dispatcher MIB warm-up skipped", exc_info=True)
+    try:
+        # Pre-create and cache the request-path view controller on the engine so
+        # hlapi reuses this warmed instance instead of building a cold one in the
+        # loop on the first request.
+        view = CommandGeneratorVarBinds.get_mib_view_controller(engine.cache)
+        view.mibBuilder.load_modules()
+    except Exception:
+        _LOGGER.debug("SNMP view MIB warm-up skipped", exc_info=True)
+
+
+def _build_engine() -> SnmpEngine:
+    """Construct and MIB-warm an SnmpEngine. Call off the event loop."""
+    engine = SnmpEngine()
+    _warm_engine(engine)
+    return engine
+
+
+async def async_create_engine() -> SnmpEngine:
+    """Create a fully MIB-warmed SnmpEngine without blocking the event loop.
+
+    Both ``SnmpEngine()`` construction and MIB loading touch the filesystem, so
+    they run in the default executor.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _build_engine)
 
 
 class SnmpError(Exception):
@@ -133,7 +180,7 @@ class CyberPowerSnmp:
 
     async def _ensure(self) -> tuple[SnmpEngine, UdpTransportTarget]:
         if self._engine is None:
-            self._engine = SnmpEngine()
+            self._engine = await async_create_engine()
             self._owns_engine = True
         if self._target is None:
             self._target = await UdpTransportTarget.create(

@@ -34,7 +34,14 @@ from .const import (
     OID_SYS_OBJECT_ID,
     VERSION_V1,
 )
-from .snmp import CyberPowerSnmp, SnmpCredentials, SnmpError, as_mac, as_str
+from .snmp import (
+    CyberPowerSnmp,
+    SnmpCredentials,
+    SnmpError,
+    as_mac,
+    as_str,
+    async_create_engine,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -223,7 +230,11 @@ async def _probe_hosts(
         return []
     done = 0
     pool_size = min(DISCOVERY_POOL_SIZE, total) or 1
-    engines = [SnmpEngine() for _ in range(pool_size)]
+    # Build + MIB-warm the pool off the event loop, so neither engine
+    # construction nor pysnmp's lazy MIB file loads block the loop later.
+    engines = list(
+        await asyncio.gather(*(async_create_engine() for _ in range(pool_size)))
+    )
     sems = [asyncio.Semaphore(DISCOVERY_PER_ENGINE) for _ in range(pool_size)]
 
     async def _bounded(index: int, host: str) -> DiscoveredPdu | None:
